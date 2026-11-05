@@ -1,0 +1,203 @@
+# ---------------------------------------------------------------------------------------
+# MITR-II-like research reactor core -- ILLUSTRATIVE configuration
+#
+# Geometry follows the published MITR-II layout: a hexagonal light-water core of 27
+# rhomboid fuel positions in three rings (A: 3, B: 9, C: 15), plate fuel elements with a
+# 57 cm fueled length, six borated-stainless shim blades (one per hexagon side, 53 cm
+# travel), and a surrounding heavy-water reflector with graphite beyond it.
+#
+# Everything NOT published in an accessible source is an engineering estimate and is
+# marked "estimate": element side length (from the ~60 mm flat-to-flat element width),
+# tank/reflector radii, blade thickness, and ALL cross sections. The two-group cross
+# sections are textbook-style homogenized values, not MITR data, so k-eff and critical
+# blade height from this file are illustrative only.
+# ---------------------------------------------------------------------------------------
+name: MITR-II-like core (illustrative)
+
+mesh:
+  cell_size: 2.0          # cm, cubic cells
+  half_width: 50.0        # cm, domain is a square prism [-50, 50] x [-50, 50]
+  z_min: -16.0            # cm (fuel bottom is z = 0)
+  z_max: 84.0
+  subsamples: 4           # per axis per cell, used to compute material volume fractions
+
+boundary:                 # all six faces
+  type: albedo
+  gamma: 0.5              # Marshak vacuum condition
+
+core:
+  lattice: hex_rhombus     # hexagon of side 3*s tiled by 27 rhombi (60/120 degree)
+  element_side: 7.0        # cm, rhombus side incl. inter-element gap (estimate)
+  fuel_bottom: 0.0         # cm
+  fuel_height: 57.0        # cm, fueled length of the HEU element
+  default_element: fuel
+  # Positions are labeled by ring (A/B/C) and counted counter-clockwise from +x.
+  # NOTE: this numbering is this program's convention, not the MITR facility numbering.
+  # The published operating practice keeps ~3 positions (two in A ring, one in B ring)
+  # as solid aluminum dummies or in-core experiments to limit power peaking.
+  positions:
+    A-2: dummy_al
+    A-3: dummy_al
+    B-5: dummy_al
+
+surroundings:
+  core_fill: h2o           # water around/above/below elements inside the core tank
+  tank_radius: 24.0        # cm, H2O region radius (estimate)
+  reflector:
+    material: d2o
+    outer_radius: 45.0     # cm (estimate)
+  beyond_reflector: graphite
+  below_core: h2o          # axial regions inside the tank radius
+  above_core: h2o
+
+control:
+  shim_bank:
+    type: hex_side_blades
+    sides: [0, 1, 2, 3, 4, 5]
+    gap: 0.4               # cm between hexagon flat and blade (estimate)
+    thickness: 0.6         # cm (estimate)
+    material: blade
+    travel: 53.0           # cm, published total travel
+    withdrawn: 26.5        # cm, current position (0 = fully inserted)
+    cusping_flux_ratio: 0.15  # rodded/unrodded flux ratio for partially rodded cells;
+                              # 1.0 = plain volume weighting (strong rod cusping)
+    drive_speed: 0.2       # cm/s, normal motor-driven speed (estimate)
+    scram_speed: 60.0      # cm/s, full-travel drop in ~0.9 s (published: blades drop in < 1 s)
+
+kinetics:
+  beta: [0.000215, 0.001424, 0.001274, 0.002568, 0.000748, 0.000273]  # Keepin, U-235 thermal
+  decay_constants: [0.0124, 0.0305, 0.111, 0.301, 1.14, 3.01]         # 1/s
+  velocities: [1.0e+7, 2.5e+5]     # cm/s, fast and thermal group (typical two-group values)
+  # Not modeled: photoneutrons from the D2O reflector (extra, very long-lived delayed groups)
+
+transient:                 # scenario for run_transient.py
+  method: pcqs             # pcqs (recommended) | adiabatic | direct
+  start_height: 25.88      # cm; the critical bank height found by run_core.py
+  initial_power_w: 1.0e+6   # starts in steady state at this power (temperatures included)
+  feedback: true           # thermal feedback (needs the thermal_hydraulics section)
+  end_time: 640.0          # s
+  dt_max: 10.0             # s, largest time step (steps shrink automatically when needed)
+  dh_max: 1.0              # cm, largest blade travel per step
+  trip_power_w: null       # automatic high-power scram setpoint (null = off)
+  commands:                # 'move' is relative to start_height
+    - {time: 10.0, move: +0.1}     # small withdrawal: power rises, feedback levels it off
+    - {time: 600.0, scram: true}   # manual scram
+    # other commands: {time: t, target: 30.0}, {time: t, inlet_temperature: 315.15},
+    #                 {time: t, flow: 0.8}   (relative to the nominal flow)
+
+materials:                 # two-group constants, cm and 1/cm (illustrative)
+  fuel:                    # homogenized HEU Al-clad plate element + coolant channels,
+    D1: 1.33               # representative of a mid-life (partly burned) core
+    D2: 0.28
+    Sa1: 0.0030
+    Sa2: 0.290
+    Ss12: 0.0270
+    nSf1: 0.0026
+    nSf2: 0.489
+  dummy_al:                # solid aluminum element
+    D1: 1.60
+    D2: 3.40
+    Sa1: 0.0005
+    Sa2: 0.0139
+    Ss12: 0.0003
+    nSf1: 0.0
+    nSf2: 0.0
+  h2o:
+    D1: 1.13
+    D2: 0.16
+    Sa1: 0.0004
+    Sa2: 0.0197
+    Ss12: 0.0494
+    nSf1: 0.0
+    nSf2: 0.0
+  d2o:
+    D1: 1.31
+    D2: 0.87
+    Sa1: 0.00001
+    Sa2: 0.00008
+    Ss12: 0.0110
+    nSf1: 0.0
+    nSf2: 0.0
+  graphite:
+    D1: 1.02
+    D2: 0.84
+    Sa1: 0.00001
+    Sa2: 0.00027
+    Ss12: 0.0028
+    nSf1: 0.0
+    nSf2: 0.0
+  blade:                   # borated stainless steel. A thin near-black absorber is outside
+    D1: 1.00               # diffusion theory's validity, so these are "equivalent" values
+    D2: 0.30               # (deliberately strong to make up for smearing the 0.6 cm blade
+    Sa1: 0.30              # over 2 cm cells); in a real code they'd be fitted to transport
+    Sa2: 10.0              # calculations of blade worth
+    Ss12: 0.0
+    nSf1: 0.0
+    nSf2: 0.0
+
+thermal_hydraulics:        # one coolant channel per fuel element, upward flow
+  inlet_temperature: 313.15        # K, 40 C (estimate)
+  total_flow_kg_s: 113.6           # 1800 gpm, published primary flow for the HEU core
+  fuel_flow_fraction: 0.9          # share passing through fuel elements (estimate)
+  per_element:                     # whole element over its 57 cm fueled length (estimates)
+    plate_heat_capacity_j_k: 1900      # 15 Al-clad plates, ~2 kg
+    coolant_heat_capacity_j_k: 4200    # ~1 kg of water in the channels
+    hA_w_k: 18000                      # plate-to-water conductance incl. fins (h ~ 12 kW/m2K)
+  rated_power_w: 6.0e+6             # published HEU licensed power (for reference)
+
+feedback:                  # fractional change of each cross section per kelvin (estimates)
+  reference_temperature: 313.15    # temperature the material constants above describe
+  materials:
+    fuel:                          # homogenized element = plates + channel water
+      coolant_temperature:         # water expands and the spectrum hardens as it heats;
+        D1: 1.8e-4                 # scaled to give ~ -12 pcm/K, typical of plate-fuel
+        D2: 1.8e-4                 # research cores (the exact MITR value is not used here)
+        Ss12: -2.4e-4
+        Sa2: -4.8e-4
+        nSf2: -4.8e-4
+      fuel_temperature:            # Doppler; weak because HEU has little U-238
+        Sa1: 3.0e-5
+
+source:                    # startup neutron source (alpha-n), emits fast neutrons
+  type: Pu-Be              # published: MITR uses a Pu-Be source
+  strength_n_s: 1.0e+7     # estimate (a few curies of Pu); the MITR value was not found
+  position: [0.0, -22.5, 28.5]   # cm (estimate): water gap just outside a core vertex, mid-height
+  radius: 1.5              # cm; spread over the cells within this radius
+
+startup:
+  start_height: 0.0        # blades fully inserted
+  # published MITR practice: raise the blades in 0.1 inch (0.254 cm) increments until
+  # critical, never more than 0.5 inch above the estimated critical position (ECP)
+
+instrumentation:
+  # Published: channels 1-2 fission chambers for startup (switched to ion chambers ~1 kW,
+  # ineffective above ~5 kW); channel 3 ion chamber on scale from ~500 W; channels 1-3
+  # short-period scram; channels 4-6 high-flux scram, 5-6 with low-range amplifiers below
+  # 100 kW; trips below. Detector positions, sensitivities, dead time and meter time
+  # constants are estimates. The real detector ports are ~4-5 ft from the core, outside
+  # this model's 50 cm domain, so the detectors sample the flux at the domain edge instead.
+  calibration_height: 25.88        # cm; signals read true power at this critical state
+  detectors:
+    lower_port: {position: [44.0, 0.0, -10.0], radius: 3.0}   # stands in for port 4IH (below, outside)
+    side_port:  {position: [-44.0, 0.0, 28.5], radius: 3.0}
+    upper_port: {position: [0.0, 0.0, 78.0], radius: 3.0}     # stands in for port 3GV (above)
+  channels:
+    # fission chamber sensitivity chosen so the shutdown count rate (blades in, source in)
+    # is a few cps; with the dead time, counting losses are ~17 % at 1 kW and ~50 % at 5 kW
+    - {name: "Ch 1", kind: fission_chamber, detector: lower_port, period: true,
+       full_scale_w: 5.0e+3, full_scale_cps: 5.0e+7, dead_time_s: 2.0e-8, min_cps: 0.1}
+    - {name: "Ch 2", kind: fission_chamber, detector: side_port, period: true,
+       full_scale_w: 5.0e+3, full_scale_cps: 5.0e+7, dead_time_s: 2.0e-8, min_cps: 0.1}
+    - {name: "Ch 3", kind: ion_chamber, detector: upper_port, period: true,
+       on_scale_w: 500.0, period_on_scale_w: 500.0}
+    - {name: "Ch 4", kind: ion_chamber, detector: lower_port, power: true, on_scale_w: 1.0e+4}
+    - {name: "Ch 5", kind: ion_chamber, detector: side_port, power: true, on_scale_w: 100.0}
+    - {name: "Ch 6", kind: ion_chamber, detector: upper_port, power: true, on_scale_w: 100.0}
+  trips:
+    short_period_s: 10.0           # published
+    high_power_w: 6.5e+6           # published
+    high_power_no_flow_w: 8.0e+4   # published (no primary flow)
+    no_flow_below: 0.05            # relative flow counted as "no flow" (estimate)
+  period_meter_time_constant_s: 3.0     # estimate (log/period amplifiers filter over seconds;
+                                        # 1 s made single 0.1-inch steps near critical trip)
+  count_rate_meter_time_constant_s: 2.0 # estimate

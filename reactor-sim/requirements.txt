@@ -1,0 +1,9 @@
+numpy
+scipy
+matplotlib
+pyyaml
+# GUIs only
+pyside6
+pyqtgraph
+pyvista
+pyvistaqt
