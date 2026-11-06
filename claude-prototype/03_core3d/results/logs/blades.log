@@ -1,0 +1,27 @@
+[1] Blade geometry and individual blade positions
+    2 cm mesh: blade areas 12.6000 .. 12.6000 cm2 vs thickness x width 12.6000 cm2: max error 2.2e-16
+      six blades moved individually to 18.3 cm vs the bank at 18.3 cm: max xs difference 0.0e+00
+      inserting blade 2 alone changes only cells that blade 2 covers
+    4 cm mesh: blade areas 12.5900 .. 12.6000 cm2 vs thickness x width 12.6000 cm2: max error 7.9e-04
+      six blades moved individually to 18.3 cm vs the bank at 18.3 cm: max xs difference 0.0e+00
+      inserting blade 2 alone changes only cells that blade 2 covers
+[2] Fit targets (2 cm mesh, regulating rod at 15.0 cm)
+    bank integral worth 9924.0 pcm vs published 9927.0 pcm: 3.0e-04
+    critical bank height 18.699 cm vs published 7.36 in = 18.694 cm: 0.005 cm
+[3] Not fitted: model vs published HEU values
+    excess reactivity (bank out) 6723 pcm = 8.55 beta vs published 6.0-7.0 beta (4716-5502 pcm)
+    bank 5 in -> out 8312 pcm = 0.838 of the bank vs published 7388.0 pcm of 10061.0 = 0.734
+    per blade (this program's sides; MITR numbering not mapped):
+      side   worth   5in->out   SDM, this blade out
+      0       1627      1309      1.35 %
+      1       2224      1821      0.76 %
+      2       1885      1545      1.14 %
+      3       1151       931      1.99 %
+      4       1665      1365      1.37 %
+      5       1887      1529      0.98 %
+    single blade worth 1151-2224 pcm (mean 1740) vs published blade #5 1776.0 pcm
+    single blade 5 in -> out 1417 pcm (mean) vs published 1258.0 pcm
+    shutdown margin 0.76-1.99 % dk/k vs published 3.35-3.56 % (HEU core 2); tech-spec minimum 1.0 %
+      NOTE: below the tech-spec minimum for some blades. Not a code error: the model's excess reactivity is too high (see above); the blade constants cannot change that (refits with Sa1/Sa2 = 0.3 or without the cusping correction moved it < 1 %)
+    4 cm live mesh: bank worth 10321 pcm, critical bank 16.119 cm, excess 7908 pcm  (192 s)
+All blade checks passed.

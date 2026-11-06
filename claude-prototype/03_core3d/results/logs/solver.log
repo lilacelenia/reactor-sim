@@ -1,0 +1,11 @@
+[1] Bare cube a=200 cm, analytic k = 1.0808483
+      8^3 cells: k = 1.0813927  error = 5.44e-04  outer its = 170
+     16^3 cells: k = 1.0809842  error = 1.36e-04  outer its = 112
+     32^3 cells: k = 1.0808819  error = 3.36e-05  outer its = 112
+     64^3 cells: k = 1.0808563  error = 7.99e-06  outer its = 113
+    convergence order: [2.   2.02 2.07]  (expect 2)
+[2] Octant symmetry: full k = 1.08088187, octant k = 1.08088192, diff = 5.3e-08
+[3] Reflected slab with albedo BCs: 3D k = 1.08636817, 1D dense eigen k = 1.08636817, diff = 2.8e-10
+[4] Fixed source: k = 0.96608, multiplication 29.4784 vs 1/(1-k) = 29.4784
+
+All verification tests passed.

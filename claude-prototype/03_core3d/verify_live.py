@@ -8,6 +8,9 @@ verify_live.py -- headless checks of the live (background-thread) simulation (4 
 [4] Time compression limits: an unreachable speed reports "lagging" with the true rate, and
     lowering the speed afterwards takes effect at once (no racing to catch up).
 [5] Reset returns to the initial state.
+[6] Automatic power control through the live API: AUTO with a +5 % setpoint matches the
+    offline TransientSolver run of the same commands; a manual regulating rod command leaves
+    AUTO; a scram switches AUTO off at once and leaves the regulating rod where it is.
 
     python3 verify_live.py        (~5 min)
 """
@@ -15,10 +18,13 @@ import time
 
 import numpy as np
 
+from controller import controller_from_config, regulating_rod_program
 from core_builder import build, load_config
 from kinetics3d import BladeProgram, PlantProgram, TransientSolver, kinetics_from_config
 from live_sim import LiveSimulation
 from thermal import ChannelThermal
+
+H0 = float(load_config("mitr2_like.yaml")["transient"]["start_height"])   # critical bank height, cm
 
 
 def wait_until(cond, timeout, poll=0.05):
@@ -42,7 +48,7 @@ def _main():
     cfg = load_config("mitr2_like.yaml")
     cfg["mesh"]["cell_size"] = 4.0
     model = build(cfg)
-    P0, h0 = 1e6, 25.9
+    P0, h0 = 1e6, H0
     live = LiveSimulation(cfg, model, power_w=P0, start_height=h0)
     t_init = time.monotonic()
     live.start(running=False)
@@ -128,7 +134,10 @@ def _main():
     print(f"[4] requested 10000x: status '{st}', achieved {ach:.0f}x")
     assert st == "running (lagging)" and ach < 1e4
     live.set_speed(1.0)
-    time.sleep(0.5)
+    seq = live.snapshot().seq
+    # a step started at 10000x may still be running: measure from the second new snapshot
+    # (one from a step that began after the speed change), not after a fixed sleep
+    wait_until(lambda: live.snapshot().seq >= seq + 2, 60)
     a = live.snapshot()
     w0 = time.monotonic()
     time.sleep(6.0)
@@ -148,6 +157,42 @@ def _main():
     assert live.status == "paused" and live.snapshot().t == 0.0, "reset must leave it paused"
     assert s.t == 0.0 and s.withdrawn == h0 and abs(s.power_w / P0 - 1) < 1e-9 and not s.scrammed
     assert live.error is None
+
+    # ---- [6] automatic control (from the reset state, t = 0)
+    live.set_auto(True, 1.05 * P0)
+    live.set_speed(1e4)
+    live.set_running(True)
+    wait_until(lambda: live.snapshot().t >= 60.0, 900)
+    live.set_running(False)
+    wait_until(lambda: live.status == "paused", 30)
+    s = live.snapshot()
+    tr = live.trends()
+    reg = regulating_rod_program(cfg)
+    ctl = controller_from_config(cfg, reg)
+    ctl.schedule(0.0, "auto", (True, 1.05 * P0))
+    off = TransientSolver(model, BladeProgram(h0, live.drive_speed, live.scram_speed, live.travel),
+                          kin=kinetics_from_config(cfg), method="pcqs", dt_max=5.0, dh_max=1.0,
+                          thermal=ChannelThermal(model, cfg), power_w=P0, reg_program=reg, controller=ctl)
+    off.run(60.0)
+    P_live = np.interp(60.0, tr["t"], tr["power_w"])
+    r_live = np.interp(60.0, tr["t"], tr["reg_rod"])
+    print(f"[6] AUTO, setpoint {s.setpoint_w / 1e6:.3f} MW from t = 0: at 60 s live {P_live / 1e6:.5f} MW, "
+          f"rod {r_live:.4f} cm; offline {off.hist.power[-1] * P0 / 1e6:.5f} MW, rod "
+          f"{off.hist.reg_rod[-1]:.4f} cm; rel. diff {abs(P_live / (off.hist.power[-1] * P0) - 1):.1e}")
+    assert s.auto and abs(P_live / (off.hist.power[-1] * P0) - 1) < 1e-6
+    assert abs(r_live - off.hist.reg_rod[-1]) < 1e-6
+    live.command_reg_rod(s.reg_rod - 1.0)
+    wait_until(lambda: not live.snapshot().auto, 30)
+    print(f"    manual rod command -> '{live.snapshot().control_message}'")
+    live.set_auto(True)
+    wait_until(lambda: live.snapshot().auto, 30)
+    a = live.snapshot()
+    live.scram()
+    wait_until(lambda: live.snapshot().scrammed, 30)
+    b = live.snapshot()
+    print(f"    AUTO again (holds {a.setpoint_w / 1e6:.5f} MW), then scram -> '{b.control_message}', "
+          f"rod {a.reg_rod:.4f} -> {b.reg_rod:.4f} cm")
+    assert not b.auto and abs(a.reg_rod - b.reg_rod) < 1e-12
     print("\nLive simulation checks passed.")
     return live
 

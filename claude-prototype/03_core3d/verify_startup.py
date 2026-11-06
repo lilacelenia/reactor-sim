@@ -17,10 +17,14 @@ import sys
 import time
 
 import numpy as np
+
+from core_builder import load_config as _load_config
 from scipy.integrate import solve_ivp
 
 from kinetics3d import BladeProgram, KineticsData, TransientSolver
 from verify_kinetics import CubeModel
+
+H0 = float(_load_config("mitr2_like.yaml")["transient"]["start_height"])   # critical bank height, cm
 
 KIN = KineticsData()
 
@@ -195,8 +199,8 @@ def test_instruments():
 
     # period meter vs actual stable period, and the short-period scram
     from kinetics3d import TransientSolver
-    prog = BladeProgram(25.9, 0.2, 60.0, 53.0)
-    prog.command(5.0, 26.0)
+    prog = BladeProgram(H0, 0.2, 60.0, 53.0)
+    prog.command(5.0, H0 + 0.1)
     s = TransientSolver(model, prog, kin=kin, thermal=ChannelThermal(model, cfg), power_w=1e3, dt_max=5.0)
     inst.reset()
     run_with_trips(s, inst, 200.0)
@@ -206,7 +210,7 @@ def test_instruments():
     print(f"    1 kW, +0.1 cm: true period {T_true:.1f} s; meters " +
           ", ".join(f"{k} {v:.1f} s" for k, v in per.items()) + f"; trips: {h.events or 'none'}")
     assert all(abs(v / T_true - 1) < 0.05 for v in per.values()) and not h.events
-    prog = BladeProgram(25.9, 0.2, 60.0, 53.0)
+    prog = BladeProgram(H0, 0.2, 60.0, 53.0)
     prog.command(5.0, 30.0)                      # continuous withdrawal
     s = TransientSolver(model, prog, kin=kin, thermal=ChannelThermal(model, cfg), power_w=1e3, dt_max=1.0)
     inst.reset()
@@ -215,21 +219,37 @@ def test_instruments():
           f"blades {s.hist.blade[-1]:.1f} cm, power {s.hist.power[-1] * 1e3:.1f} W at 40 s")
     assert "short-period" in s.hist.events[0][1] and s.hist.blade[-1] == 0.0
     # high flux trip at full power, and the no-flow limit
-    prog = BladeProgram(25.9, 0.2, 60.0, 53.0)
-    prog.command(5.0, 26.0)
+    prog = BladeProgram(H0, 0.2, 60.0, 53.0)
+    prog.command(5.0, H0 + 0.1)
     s = TransientSolver(model, prog, kin=kin, thermal=ChannelThermal(model, cfg), power_w=6.0e6, dt_max=1.0)
     inst.reset()
     run_with_trips(s, inst, 120.0)
     print(f"    6 MW, +0.1 cm: {s.hist.events[0][1]} at {s.hist.events[0][0]:.1f} s")
     assert "high-flux" in s.hist.events[0][1]
     plant = PlantProgram()
-    plant.set(5.0, "flow", 0.0)
-    s = TransientSolver(model, BladeProgram(25.9, 0.2, 60.0, 53.0), kin=kin,
+    plant.set(5.0, "pumps", 0)
+    s = TransientSolver(model, BladeProgram(H0, 0.2, 60.0, 53.0), kin=kin,
                         thermal=ChannelThermal(model, cfg), power_w=1.0e5, dt_max=1.0, plant=plant)
     inst.reset()
     run_with_trips(s, inst, 10.0)
-    print(f"    100 kW, primary flow lost at 5 s: {s.hist.events[0][1]} at {s.hist.events[0][0]:.1f} s")
-    assert "without primary flow" in s.hist.events[0][1]
+    print(f"    100 kW, both pumps trip at 5 s: {s.hist.events[0][1]} at {s.hist.events[0][0]:.2f} s")
+    assert "low primary flow" in s.hist.events[0][1]
+    # below the no-flow limit the reactor may stay up in natural circulation; raising power
+    # past 80 kW without flow then trips the high-flux scram
+    plant = PlantProgram()
+    plant.set(5.0, "pumps", 0)
+    prog = BladeProgram(H0, 0.2, 60.0, 53.0)
+    prog.command(400.0, H0 + 1.0)                    # ~190 pcm, after natural circulation has settled
+    s = TransientSolver(model, prog, kin=kin, thermal=ChannelThermal(model, cfg), power_w=5.0e4,
+                        dt_max=5.0, plant=plant)
+    inst.reset()
+    run_with_trips(s, inst, 800.0)
+    ev = s.hist.events
+    i400 = int(np.searchsorted(s.hist.t, 400.0))
+    print(f"    50 kW, pumps trip at 5 s (no scram: below 80 kW; natural-circulation flow "
+          f"{s.hist.core_flow[i400]:.2f} kg/s at 400 s), +1.0 cm at 400 s: "
+          f"{ev[0][1] if ev else 'no trip'} at {ev[0][0] if ev else float('nan'):.1f} s")
+    assert ev and "without primary flow" in ev[0][1] and ev[0][0] > 400.0
 
 
 # ----------------------------------------------------------------------------- [4]
@@ -299,6 +319,8 @@ def test_approach(plot=True):
     # (moving 0.5 cm in one go from here tripped the 10 s period scram)
     t_super = s.t
     target = ecp + MITR_STEP
+    if inst.one_over_m.points[-1][3] < 1e-3:   # last count already diverging: supercritical,
+        target = h                             # so an operator would not withdraw further
     while h < target - 1e-6:
         h_new = min(h + MITR_STEP, target)
         s.prog.command(s.t, h_new)
@@ -307,7 +329,7 @@ def test_approach(plot=True):
     advance(s.t + 300.0)
     per = [r.period for r in inst.readings if r.name == "Ch 1"][0]
     T_true = (s.hist.t[-1] - s.hist.t[-4]) / np.log(s.hist.power[-1] / s.hist.power[-4])
-    print(f"    stepped to ECP + 0.1 inch = {target:.2f} cm: supercritical, power "
+    print(f"    stepped to {target:.2f} cm (ECP + 0.1 inch, or stayed if already supercritical): power "
           f"{s.hist.power[-1] * s.P0:.3g} W, period meter {per:.0f} s (true {T_true:.0f} s), no trip")
     assert per > 10.0 and T_true > 0
     if plot:

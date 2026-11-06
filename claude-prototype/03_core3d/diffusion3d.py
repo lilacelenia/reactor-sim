@@ -125,25 +125,69 @@ def build_loss_matrix(mesh, D, removal, bc):
     return A
 
 
+def pcg(A, b, x0, rtol, dinv, maxiter=20000):
+    """Jacobi-preconditioned conjugate gradients for SPD A (CSR), stopping when
+    ||b - A x|| <= rtol ||b|| (scipy's criterion). A lean replacement for scipy.sparse.linalg.cg,
+    whose LinearOperator wrapping cost more than the matrix-vector products themselves on
+    these meshes. dinv: 1 / diag(A) as an array. Returns x (raises if not converged)."""
+    bnorm = np.linalg.norm(b)
+    if bnorm == 0.0:
+        return np.zeros_like(b)
+    tol2 = (rtol * bnorm) ** 2
+    if x0 is None:
+        x = np.zeros_like(b)
+        r = b.copy()
+    else:
+        x = x0.copy()
+        r = b - A @ x
+    rr = r @ r
+    if rr <= tol2:
+        return x
+    z = dinv * r
+    p = z.copy()
+    rz = r @ z
+    for _ in range(maxiter):
+        Ap = A @ p
+        alpha = rz / (p @ Ap)
+        x += alpha * p
+        r -= alpha * Ap
+        if r @ r <= tol2:
+            return x
+        np.multiply(dinv, r, out=z)
+        rz_new = r @ z
+        p *= rz_new / rz
+        p += z
+        rz = rz_new
+    raise RuntimeError("CG did not converge")
+
+
 class _GroupSolver:
     """Solves A x = b repeatedly with warm-started, Jacobi-preconditioned CG.
-    (A is symmetric positive definite.) Small systems use a direct LU instead."""
+    (A is symmetric positive definite.) Only tiny systems use a direct LU: for 3D meshes the
+    LU fill makes it slower than warm-started CG with adaptive tolerances (4 cm MITR mesh,
+    15,625 cells: eigenvalue solve 6.3 s with LU, 0.6 s with CG; 2 cm: LU runs out of memory)."""
 
-    def __init__(self, A, direct_limit=60_000):
+    def __init__(self, A, direct_limit=4_000):
         self.A = A
         self.lu = spla.splu(A.tocsc()) if A.shape[0] <= direct_limit else None
-        self.M = sp.diags(1.0 / A.diagonal())
+        self.A = A.tocsr()
+        self.dinv = 1.0 / A.diagonal()
 
     def solve(self, b, x0, rtol):
         if self.lu is not None:
             return self.lu.solve(b)
-        x, info = spla.cg(self.A, b, x0=x0, rtol=rtol, maxiter=5000, M=self.M)
-        if info > 0:
-            raise RuntimeError("CG did not converge")
-        return x
+        return pcg(self.A, b, x0, rtol, self.dinv, maxiter=5000)
 
 
 # ----------------------------------------------------------------------------- solvers
+def inner_rtol(change, floor, ceiling=1e-2, factor=0.05):
+    """Relative tolerance for the inner (group) solves of an outer iteration whose source
+    still changes by `change`: solving more accurately than the outer error is wasted work.
+    It tightens to `floor` (the fixed tolerance used before) as the outer iteration
+    converges, so the converged answer is the same."""
+    return max(floor, min(ceiling, factor * change))
+
+
 def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbose=False):
     """k-eigenvalue problem by power (source) iteration.
 
@@ -162,8 +206,10 @@ def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbo
     src /= np.linalg.norm(src)
 
     converged = False
+    floor = max(1e-10, min(1e-4, tol_src * 0.1))
+    dsrc = 1.0
     for it in range(1, max_outer + 1):
-        rtol = max(1e-10, min(1e-4, tol_src * 0.1))
+        rtol = inner_rtol(dsrc, floor)
         phi1 = g1.solve(src / k, phi1, rtol)
         phi2 = g2.solve(flat["Ss12"] * phi1, phi2, rtol)
         new = flat["nSf1"] * phi1 + flat["nSf2"] * phi2
@@ -177,7 +223,9 @@ def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbo
         src, k = new, k_new
         if verbose and (it % 25 == 0 or it == 1):
             print(f"    outer {it:4d}  k = {k:.7f}  dk = {dk:.1e}  dsrc = {dsrc:.1e}")
-        if dk < tol_k and dsrc < tol_src:
+        # only accept convergence from a sweep done at full inner accuracy: a warm start can
+        # already satisfy a loose inner tolerance, which would leave the source unchanged
+        if dk < tol_k and dsrc < tol_src and rtol <= floor:
             converged = True
             break
 
@@ -196,11 +244,14 @@ def solve_fixed_source(problem, Q1, Q2=None, tol=1e-6, max_outer=5000):
     g2 = _GroupSolver(build_loss_matrix(m, xs["D2"], xs["Sa2"], problem.bc))
     phi1, phi2 = np.zeros(m.n_cells), np.zeros(m.n_cells)
     fis = np.zeros(m.n_cells)
+    change = 1.0
     for it in range(1, max_outer + 1):
-        phi1 = g1.solve(fis + Q1, phi1, 1e-10)
-        phi2 = g2.solve(flat["Ss12"] * phi1 + Q2, phi2, 1e-10)
+        rtol = inner_rtol(change, 1e-10)
+        phi1 = g1.solve(fis + Q1, phi1, rtol)
+        phi2 = g2.solve(flat["Ss12"] * phi1 + Q2, phi2, rtol)
         new = flat["nSf1"] * phi1 + flat["nSf2"] * phi2
-        if np.linalg.norm(new - fis) <= tol * max(np.linalg.norm(new), 1e-300):
+        change = np.linalg.norm(new - fis) / max(np.linalg.norm(new), 1e-300)
+        if change <= tol and rtol <= 1e-10:
             fis = new
             break
         fis = new

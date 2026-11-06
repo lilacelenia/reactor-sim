@@ -7,7 +7,9 @@ Modeled on the published MITR nuclear safety system (see the YAML for sources):
     fission chambers stop working properly above ~5 kW (counting losses).
   * Channel 3: period channel on an ion chamber, on scale from ~500 W.
   * Channels 4-6: linear power (ion chambers); 5 and 6 have low-range amplifiers < 100 kW.
-  * Scrams: short period 10 s; high flux 6.5 MW, or 80 kW without primary flow.
+  * Scrams: short period 10 s; high flux 6.5 MW, or 80 kW without primary flow; low primary
+    flow (1800 gpm of the normal 2000 with both pumps), armed only above the no-flow power
+    limit so the reactor can run at low power in natural convection.
 Detector positions, sensitivities, dead time, meter time constants and the startup source
 strength are estimates.
 
@@ -111,6 +113,8 @@ class InstrumentSystem:
         self.high_power = float(tr["high_power_w"])
         self.high_power_no_flow = float(tr["high_power_no_flow_w"])
         self.no_flow_below = float(tr.get("no_flow_below", 0.05))
+        lf = tr.get("low_flow_relative")
+        self.low_flow = None if lf is None else float(lf)
         self.tau_period = float(ic.get("period_meter_time_constant_s", 1.0))
         self.tau_meter = float(ic.get("count_rate_meter_time_constant_s", 2.0))
         self.channels = ic["channels"]
@@ -184,6 +188,10 @@ class InstrumentSystem:
                     trip = (f"high-flux scram ({name}: {_fmt_w(s)} > {_fmt_w(limit)}"
                             f"{' without primary flow' if flow < self.no_flow_below else ''})")
             readings.append(rd)
+        if (trip is None and self.low_flow is not None and solver.thermal is not None and flow < self.low_flow
+                and solver.hist.power[-1] * solver.P0 > self.high_power_no_flow):
+            trip = (f"low primary flow scram (flow {flow:.0%} of normal < {self.low_flow:.0%}, "
+                    f"power above {_fmt_w(self.high_power_no_flow)})")
 
         # counting for 1/M: integrate the (dead-time corrected) rate, then draw Poisson counts
         if self._count is not None and dt:

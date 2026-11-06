@@ -1,0 +1,17 @@
+[2] Bare cube vs exact separable solution
+    k0 exact = 1.1313048;  reactivity range -0.82 $ .. +0.82 $
+    direct    dt_max=0.02   steps= 345  max rel. power error = 6.71e-02   (4.2 s)
+    direct    dt_max=0.01   steps= 690  max rel. power error = 3.41e-02   (5.4 s)
+    direct    dt_max=0.005  steps=1380  max rel. power error = 1.91e-02   (10.8 s)
+    pcqs      dt_max=0.5    steps=  41  max rel. power error = 1.77e-05   (1.7 s)
+    pcqs      dt_max=0.1    steps= 117  max rel. power error = 1.12e-05   (3.3 s)
+    adiabatic dt_max=0.1    steps= 117  max rel. power error = 1.84e-04   (5.4 s)
+    direct method convergence order in dt at t = [2.  3.9 6. ] s:
+      [[1.03, 1.03, 1.04], [1.01, 1.02, 1.02]] (expect 1)
+    (the peak error, during the scram drop, is still pre-asymptotic at these steps)
+[1] Steady state (nothing moves)
+    direct   : max |P - 1| over 3 s = 2.4e-10
+    pcqs     : max |P - 1| over 3 s = 2.7e-08
+    adiabatic: max |P - 1| over 3 s = 2.7e-08
+
+Kinetics verification finished.

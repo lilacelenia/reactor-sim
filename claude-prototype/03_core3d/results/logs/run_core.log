@@ -1,0 +1,20 @@
+MITR-II-like core (illustrative)
+Shim bank sweep:
+  blades at   0.0 cm: k = 0.96898   (31 its, 2.9 s)
+  blades at   8.8 cm: k = 0.97694   (44 its, 3.9 s)
+  blades at  17.7 cm: k = 0.99634   (46 its, 3.9 s)
+  blades at  26.5 cm: k = 1.02275   (37 its, 3.3 s)
+  blades at  35.3 cm: k = 1.04528   (34 its, 2.9 s)
+  blades at  44.2 cm: k = 1.06172   (37 its, 3.3 s)
+  blades at  53.0 cm: k = 1.07208   (39 its, 3.8 s)
+Searching for critical bank height:
+  trial  18.89 cm -> k = 1.000543
+  trial  18.73 cm -> k = 1.000103
+  trial  18.70 cm -> k = 1.000015
+
+Critical shim bank height: 18.70 cm  (k = 1.000015)
+Shim bank worth (out -> in): 9.92 % dk/k
+Excess reactivity, bank fully out: 6.72 % dk/k
+Element peaking factor: 1.319 (A-1);  lowest fueled: 0.763
+Ring-average relative power: A: 1.319, B: 1.156, C: 0.896
+Saved mitr2_like_results.png and mitr2_like_results.json

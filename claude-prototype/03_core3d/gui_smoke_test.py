@@ -230,6 +230,32 @@ pump(win, 4)
 print(f"live: selected {win.labels[win.selected]}, inlet now {win.snap.inlet_c:.1f} C, "
       f"axial canvas draws {win.canvas.draws}")
 assert abs(win.snap.inlet_c - 37.0) < 1e-9 and win.canvas.draws > 0
+r0 = win.snap.reg_rod
+win.reg_btns[1].clicked.emit(False)         # regulating rod +0.5 cm by hand
+wait(lambda: win.snap.reg_rod >= r0 + 0.5 - 1e-9, 120, win)
+print(f"live: regulating rod {r0:.2f} -> {win.snap.reg_rod:.2f} cm | {win.reg_lbl.text()}")
+win.auto_chk.setChecked(True)               # AUTO: holds the power of this moment
+wait(lambda: win.snap.auto, 60, win)
+pump(win, 1)
+held = win.snap.setpoint_w
+print(f"live: AUTO on, holding {held / 1e6:.4f} MW; spin box {win.sp_spin.value():.3f} kW | {win.ctl_lbl.text()}")
+assert abs(win.sp_spin.value() * 1e3 - held) < 1e-6 * held
+win.sp_spin.setValue(held * 1.02 / 1e3)
+win.sp_spin.editingFinished.emit()
+wait(lambda: abs(win.snap.setpoint_w / (held * 1.02) - 1) < 1e-9, 60, win)
+pump(win, 4)
+print(f"live: setpoint {win.snap.setpoint_w / 1e6:.4f} MW, power {win.snap.power_w / 1e6:.4f} MW, "
+      f"rod {win.snap.reg_rod:.3f} cm")
+assert win.snap.auto and win.tcanvas.draws > 0
+win.pump_box.setCurrentText("0")            # trip both primary pumps -> coastdown
+wait(lambda: win.snap is not None and win.snap.scrammed, 120, win)
+pump(win, 2)
+print(f"live: pumps tripped: {win.snap.trip_reason} | {win.read['Primary loop'].text()}")
+assert "low primary flow" in win.snap.trip_reason and win.snap.pumps_running == 0
+assert win.snap.flow < 0.9 and win.snap.decay_heat_w > 0
+print(f"live: controller after the trip: AUTO {win.snap.auto}, box checked {win.auto_chk.isChecked()}, "
+      f"enabled {win.auto_chk.isEnabled()} | {win.ctl_lbl.text()}")
+assert not win.snap.auto and not win.auto_chk.isChecked() and not win.auto_chk.isEnabled()
 win.scram_btn.clicked.emit(False)            # Qt passes 'checked'
 wait(lambda: win.snap is not None and win.snap.scrammed, 60, win)
 pump(win, 2)
@@ -242,6 +268,8 @@ assert win.live.snapshot().t == 0.0 and win.live.status == "paused", "reset must
 print("live: after reset:", win.read["Sim time"].text().strip(), win.read["Power"].text(),
       "| slider", win.slider.value() / core_viewer.SLIDER_SCALE, "cm | enabled", win.slider.isEnabled())
 assert win.slider.isEnabled() and win.live.error is None
+assert win.pump_box.currentText() == "2" and win.live.snapshot().pumps_running == 2
+assert not win.auto_chk.isChecked() and win.live.snapshot().reg_rod == win.live.r0
 win.closeEvent(MagicMock())
 
 # ------------------------------------------------------------------ live, no feedback

@@ -1,0 +1,18 @@
+live: initialized; paused | power 1 MW
+live: t=34.5s  1.15 MW  period +442.6 s  blades 18.80/18.80  status 'running (lagging) -- 4.3x achieved'
+live: selected A-1, inlet now 37.0 C, axial canvas draws 12
+live: regulating rod 15.00 -> 15.50 cm | actual 15.50 cm, target 15.50 cm  (manual; 0.5 cm/s)
+live: AUTO on, holding 1.5360 MW; spin box 1535.970 kW | holding 1.54 MW -- automatic control on
+live: setpoint 1.5667 MW, power 1.6044 MW, rod 15.041 cm
+live: pumps tripped: low primary flow scram (flow 88% of normal < 90%, power above 80 kW) | 110.3 kg/s (87%), pumps 0/2 at 78%, NCVs shut, decay heat 80.7 kW
+live: controller after the trip: AUTO False, box checked False, enabled False | manual -- scram: automatic control off
+live: after scram: SCRAMMED (low primary flow scram (flow 88% of normal < 90%,  | slider enabled: False
+live: after reset: 0.0 s 1 MW | slider 18.7 cm | enabled True
+live (no feedback): 100 W feedback off
+startup: power 1.7 mW | start: k = 0.9764 (blades 0.0 cm)
+         Ch 1: 12.2 cps | Ch 2: 18.6 cps | Ch 3: 2.28 mW  [below range] | Ch 4: 1.17 mW  [below range] | Ch 5: 1.69 mW  [below range] | Ch 6: 2.28 mW  [below range]
+startup: after two counts: last count 19.1 +- 0.8 cps at 8.00 cm, 1/M = 0.591   ECP = 19.54 cm
+static: k = 1.00898 | status up to date
+static: critical search -> 16.12 cm  (0.4 s) k = 1.00001
+
+GUI logic smoke test passed.

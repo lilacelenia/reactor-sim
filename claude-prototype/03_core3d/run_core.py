@@ -18,7 +18,7 @@ import numpy as np
 from matplotlib.collections import PolyCollection
 from matplotlib.patches import Circle
 
-from core_builder import build, load_config
+from core_builder import build, load_config, regulating_rod_xy
 from diffusion3d import solve_k
 
 
@@ -85,7 +85,12 @@ def plot(cfg, sweep, h_crit, model, r, out_png):
         a, b = c - t * lat.hex_side / 2, c + t * lat.hex_side / 2
         ax.plot([a[0], b[0]], [a[1], b[1]], color="#1f77b4", lw=3)
     ax.add_patch(Circle((0, 0), cfg["surroundings"]["tank_radius"], fill=False, ls="--", lw=0.8))
-    ax.set(xlim=(-26, 26), ylim=(-26, 26), aspect="equal", title="Relative element power (blue = shim blades)")
+    title = "Relative element power (blue = shim blades)"
+    geo = regulating_rod_xy(cfg)
+    if geo is not None:
+        ax.add_patch(Circle(tuple(geo[0]), geo[1], color="#e67e22"))
+        title = "Relative element power (blue = shim blades, orange = regulating rod)"
+    ax.set(xlim=(-26, 26), ylim=(-26, 26), aspect="equal", title=title)
     fig.colorbar(pc, ax=ax, shrink=0.8)
 
     # (b) integral blade worth curve

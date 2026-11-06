@@ -4,7 +4,8 @@
 # Geometry follows the published MITR-II layout: a hexagonal light-water core of 27
 # rhomboid fuel positions in three rings (A: 3, B: 9, C: 15), plate fuel elements with a
 # 57 cm fueled length, six borated-stainless shim blades (one per hexagon side, 53 cm
-# travel), and a surrounding heavy-water reflector with graphite beyond it.
+# travel), a cadmium regulating rod at one corner of the core, and a surrounding heavy-water
+# reflector with graphite beyond it.
 #
 # Everything NOT published in an accessible source is an engineering estimate and is
 # marked "estimate": element side length (from the ~60 mm flat-to-flat element width),
@@ -58,11 +59,69 @@ control:
     thickness: 0.6         # cm (estimate)
     material: blade
     travel: 53.0           # cm, published total travel
-    withdrawn: 26.5        # cm, current position (0 = fully inserted)
+    withdrawn: 18.7        # cm, current position (0 = fully inserted)
+    # Published HEU values the blades are fitted to / compared with (HEU SAR Table 4-4 and
+    # MCNP results, quoted in ANL/RERTR/TM-10-40, Tables 1, 4, 12, 13). verify_blades.py
+    # fits materials.blade.Sa2 (Sa1 = Sa1_over_Sa2 * Sa2) and the fuel nSf1/nSf2 to the
+    # first two; the rest are independent checks.
+    published:
+      bank_worth_pcm: 9927.0          # fit target: shim bank integral worth (12.63 beta)
+      critical_height_in: 7.36        # fit target: HEU core 1 initial critical bank height
+      pcm_per_beta: 786.0             # 9927 pcm / 12.63 beta, as the report converts
+      excess_reactivity_beta: [6.0, 7.0]   # "typical" HEU excess reactivity
+      bank_worth_typical_pcm: 10061.0      # typical bank worth (12.8 beta) ...
+      bank_5in_to_out_pcm: 7388.0          # ... of which 5 in -> fully out (9.4 beta)
+      single_blade_worth_pcm: 1776.0       # blade #5 integral worth (2.26 beta)
+      single_blade_5in_to_out_pcm: 1258.0  # one blade, 5 in -> fully out (1.6 beta)
+      shutdown_margin_pct: [3.35, 3.56]    # HEU core 2, 5 blades in, one out, reg rod out
+      shutdown_margin_min_pct: 1.0         # tech-spec minimum
+    Sa1_over_Sa2: 0.03     # blade fast/thermal absorption ratio kept in the fit (estimate)
     cusping_flux_ratio: 0.15  # rodded/unrodded flux ratio for partially rodded cells;
                               # 1.0 = plain volume weighting (strong rod cusping)
     drive_speed: 0.2       # cm/s, normal motor-driven speed (estimate)
     scram_speed: 60.0      # cm/s, full-travel drop in ~0.9 s (published: blades drop in < 1 s)
+  regulating_rod:
+    # Published (MITR): one regulating rod, cadmium on an aluminum rod; a low-worth device
+    # used to hold power, moved by hand or by an automatic controller; no scram capability
+    # (tech specs ML102320068, 1.3.31). It stands at a corner of the core hexagon, between
+    # shim blades 1 and 6 (MITR core maps; ANL HEU/LEU benchmark report, ANL pub. 68856). HEU SAR integral
+    # worth 124 pcm (158 mbeta), quoted in the ANL HEU/LEU conversion analysis (OSTI 1008288).
+    # Tech-spec limits (3.2.2): a device on an automatic controller may hold < 0.5 % dk/k of
+    # available positive reactivity; controlled insertion rate < 5e-4 dk/k/s.
+    # Estimates: which corner (program convention), radial position, radius, travel, drive
+    # speed, the nominal position, and the equivalent absorber constants (material reg_rod),
+    # whose Sa2 is calibrated so the integral worth is 124 pcm on the 2 cm mesh with the shim
+    # bank at its critical height (python3 verify_control.py calibrate).
+    corner_angle: 330.0    # deg from +x: the corner between the blades on sides 0 and 5
+    radial_position: 23.0  # cm from the core axis (hexagon corner at 21 cm, tank wall at 24 cm)
+    radius: 0.9            # cm (estimate)
+    material: reg_rod
+    travel: 53.0           # cm (estimate: same as the blades)
+    withdrawn: 15.0        # cm, nominal position (estimate). Below the bank tip on purpose: the
+                           # blades shadow the rod, so above the tip it is worth almost nothing
+                           # (published MITR trend: its worth grows as the bank is withdrawn)
+    drive_speed: 0.5       # cm/s (estimate; worth rate ~2 pcm/s, far below the tech-spec limit)
+    published_worth_pcm: 124.0
+
+power_controller:
+  # Automatic power controller driving the regulating rod (estimates: no MITR controller
+  # description was found; the tech specs only require it to be separate from the safety
+  # system, so it reads its own channel -- here the fission power -- not the trip channels).
+  # Sampled-data period-demand law, every sample_period_s:
+  #   x = ln(P / P_set),  w = (x - x_prev) / Ts  (measured inverse period),
+  #   w* = clip(-x / approach_time_s, -1/min_period_down_s, 1/min_period_up_s),
+  #   rod speed v = clip(rod_gain_cm * (w* - w), -v_max, v_max), v_max = rod drive speed.
+  # In steady state w = 0 and v = 0, so P = P_set exactly (the rod position integrates).
+  # Gains tuned on point kinetics: rod_gain * (max reg-rod worth per cm) / beta ~ 0.3 keeps
+  # the sampled loop from chattering; ~10 % overshoot of a setpoint step at zero power,
+  # ~1 % at power (feedback damps it). It switches to manual on a scram.
+  sample_period_s: 1.0
+  approach_time_s: 30.0
+  rod_gain_cm: 22.0           # cm of rod per (1/s) of inverse-period error, i.e. (cm/s)/(1/s);
+                              # 40 before the blade refit, scaled by the change in rod
+                              # differential worth at the nominal position (5.2 -> 9.3 pcm/cm)
+  min_period_up_s: 30.0       # power is never raised faster than this period
+  min_period_down_s: 30.0
 
 kinetics:
   beta: [0.000215, 0.001424, 0.001274, 0.002568, 0.000748, 0.000273]  # Keepin, U-235 thermal
@@ -72,7 +131,7 @@ kinetics:
 
 transient:                 # scenario for run_transient.py
   method: pcqs             # pcqs (recommended) | adiabatic | direct
-  start_height: 25.88      # cm; the critical bank height found by run_core.py
+  start_height: 18.70      # cm; the critical bank height (2 cm mesh, regulating rod at 15 cm)
   initial_power_w: 1.0e+6   # starts in steady state at this power (temperatures included)
   feedback: true           # thermal feedback (needs the thermal_hydraulics section)
   end_time: 640.0          # s
@@ -83,7 +142,11 @@ transient:                 # scenario for run_transient.py
     - {time: 10.0, move: +0.1}     # small withdrawal: power rises, feedback levels it off
     - {time: 600.0, scram: true}   # manual scram
     # other commands: {time: t, target: 30.0}, {time: t, inlet_temperature: 315.15},
-    #                 {time: t, flow: 0.8}   (relative to the nominal flow)
+    #                 {time: t, reg_rod: 20.0}   (regulating rod target, manual)
+    #                 {time: t, auto: true, setpoint_w: 1.2e+6}  (automatic power control on;
+    #                  setpoint_w optional: default = power at that moment), {time: t, auto: false}
+    #                 {time: t, flow: 0.8}   (pump speed target, relative; flow follows)
+    #                 {time: t, pumps: 0}    (pumps running: 0 trips both -> coastdown)
 
 materials:                 # two-group constants, cm and 1/cm (illustrative)
   fuel:                    # homogenized HEU Al-clad plate element + coolant channels,
@@ -92,8 +155,8 @@ materials:                 # two-group constants, cm and 1/cm (illustrative)
     Sa1: 0.0030
     Sa2: 0.290
     Ss12: 0.0270
-    nSf1: 0.0026
-    nSf2: 0.489
+    nSf1: 0.0025772        # fitted with the blades: 0.99124 x the earlier estimates
+    nSf2: 0.484717         # (0.0026, 0.489) so the bank is critical at the published 7.36 in
   dummy_al:                # solid aluminum element
     D1: 1.60
     D2: 3.40
@@ -126,24 +189,87 @@ materials:                 # two-group constants, cm and 1/cm (illustrative)
     Ss12: 0.0028
     nSf1: 0.0
     nSf2: 0.0
+  reg_rod:                 # cadmium: strong thermal absorber, nearly transparent to fast
+    D1: 1.00               # neutrons. "Equivalent" constants like the blades'; Sa2 is
+    D2: 0.30               # calibrated to the published integral worth (see control)
+    Sa1: 0.005
+    Sa2: 17.3035           # calibrated: 124.00 pcm on the 2 cm mesh (verify_control.py calibrate)
+    Ss12: 0.0
+    nSf1: 0.0
+    nSf2: 0.0
   blade:                   # borated stainless steel. A thin near-black absorber is outside
-    D1: 1.00               # diffusion theory's validity, so these are "equivalent" values
-    D2: 0.30               # (deliberately strong to make up for smearing the 0.6 cm blade
-    Sa1: 0.30              # over 2 cm cells); in a real code they'd be fitted to transport
-    Sa2: 10.0              # calculations of blade worth
+    D1: 1.00               # diffusion theory's validity, so these are "equivalent" values.
+    D2: 0.30               # Sa2 is FITTED (with the fuel nSf) to the published HEU bank worth
+    Sa1: 0.0371181         # 9927 pcm and critical height 7.36 in on the 2 cm mesh
+    Sa2: 1.23727           # (python3 verify_blades.py calibrate); Sa1 = 0.03 Sa2 (estimate)
     Ss12: 0.0
     nSf1: 0.0
     nSf2: 0.0
 
 thermal_hydraulics:        # one coolant channel per fuel element, upward flow
   inlet_temperature: 313.15        # K, 40 C (estimate)
-  total_flow_kg_s: 113.6           # 1800 gpm, published primary flow for the HEU core
+  total_flow_kg_s: 126.2           # 2000 gpm: published normal flow (2003 MITR loss-of-flow
+                                   # analysis, NRC ML081000627); LSSS minimum is 1800 gpm
   fuel_flow_fraction: 0.9          # share passing through fuel elements (estimate)
   per_element:                     # whole element over its 57 cm fueled length (estimates)
     plate_heat_capacity_j_k: 1900      # 15 Al-clad plates, ~2 kg
     coolant_heat_capacity_j_k: 4200    # ~1 kg of water in the channels
     hA_w_k: 18000                      # plate-to-water conductance incl. fins (h ~ 12 kW/m2K)
   rated_power_w: 6.0e+6             # published HEU licensed power (for reference)
+
+decay_heat:
+  # Published standard: ANS-5.1-1979 decay heat for thermal fission of U-235, 23-group fit
+  # (as tabulated in the NRC WCOBRA/TRAC models report, ML050910161, Table 8-1).
+  # Infinite-irradiation fraction: 6.6 % at shutdown, 4.4 % after 16 s, 2.5 % after 300 s.
+  # Not included: actinide (U-239/Np-239) decay heat (small for 93 % HEU) and the ~7 % of
+  # decay energy that gammas deposit outside the fuel (all of it heats the plates here).
+  # The initial state is equilibrium after long operation at the starting power (estimate;
+  # MITR runs continuously for weeks).
+  energy_per_fission_mev: 200.0    # recoverable energy per fission (same as kinetics)
+  alpha_mev_per_fission_s: [6.5057e-01, 5.1264e-01, 2.4384e-01, 1.3850e-01, 5.5440e-02,
+                            2.2225e-02, 3.3088e-03, 9.3015e-04, 8.0943e-04, 1.9567e-04,
+                            3.2535e-05, 7.5595e-06, 2.5232e-06, 4.9948e-07, 1.8531e-07,
+                            2.6608e-08, 2.2398e-09, 8.1641e-12, 8.7797e-11, 2.5131e-14,
+                            3.2176e-16, 4.5038e-17, 7.4791e-17]
+  lambda_per_s: [2.2138e+01, 5.1587e-01, 1.9594e-01, 1.0314e-01, 3.3656e-02, 1.1681e-02,
+                 3.5870e-03, 1.3930e-03, 6.2630e-04, 1.8906e-04, 5.4988e-05, 2.0958e-05,
+                 1.0010e-05, 2.5438e-06, 6.6361e-07, 1.2290e-07, 2.7213e-08, 4.3714e-09,
+                 7.5780e-10, 2.4786e-10, 2.2384e-13, 2.4600e-14, 1.5699e-14]
+
+primary_loop:
+  # Published (MITR): two primary pumps in parallel; flow down the tank wall and up through
+  # the core; four natural convection valves (NCVs, ball valves) that open by themselves
+  # when forced flow stops, plus two anti-siphon valves (not modeled: conservative); a
+  # hexagonal flow guide ~76 cm high above the core (LEU PSAR ML17345A518, sec. 4.2).
+  # Tech specs (ML102320068): 1800 gpm min with 2 pumps, 900 gpm with 1 pump, 100 kW max
+  # with none. Everything else here is an estimate -- no MITR pump coastdown data was found.
+  pumps: 2                         # published
+  pump_head_pa: 2.0e+5             # estimate, both pumps at full speed
+  core_pressure_drop_pa: 2.0e+4    # estimate, at nominal flow (turbulent, ~ W^2)
+  coastdown_time_constant_s: 3.0   # estimate (no flywheel): tau dw/dt = -(w^2 + f) after a trip
+  pump_friction_ratio: 0.05        # estimate f: friction / full-speed hydraulic torque; with tau
+                                   # the pumps stop ~18 s after a trip. (Published MITR analyses
+                                   # show the second temperature peak ~16 s after loss of flow;
+                                   # here the flow minimum comes later, ~60 s: see README)
+  spinup_time_constant_s: 2.0      # estimate
+  inertia_core_per_m: 20.0         # estimate, sum of L/A: core channels and plenums
+  inertia_pump_loop_per_m: 1200.0  # estimate: ~60 m of ~25 cm pipe, heat exchanger, tank annulus
+  inertia_ncv_per_m: 100.0         # estimate
+  chimney_height_m: 0.76           # published flow-guide height above the core (LEU PSAR)
+  pump_loop_drop_m: 4.0            # estimate: the hot leg runs down from the tank outlet to the
+                                   # heat exchangers, so the stopped pump loop opposes natural
+                                   # circulation (which then goes through the NCVs)
+  check_valve_reverse_factor: 1.0e+4  # estimate: reverse-flow resistance / forward (check valves)
+  natural_convection_valves: 4     # published
+  nc_calibration:
+    # Published MULCH-II result (LEU PSAR Table 4-18, NCVs only): 1.35 kg/s through the core
+    # at 100 kW with 60 C inlet, uniform axial power. The NCV path resistance is set so this
+    # model reproduces it under the same conditions (taken as the flow through the fuel
+    # channels; the 10 % bypass is added on top). That analysis is for the LEU core; using
+    # it for this HEU-like core is an estimate.
+    power_w: 1.0e+5
+    inlet_temperature_c: 60.0
+    core_flow_kg_s: 1.35
 
 feedback:                  # fractional change of each cross section per kelvin (estimates)
   reference_temperature: 313.15    # temperature the material constants above describe
@@ -176,7 +302,7 @@ instrumentation:
   # 100 kW; trips below. Detector positions, sensitivities, dead time and meter time
   # constants are estimates. The real detector ports are ~4-5 ft from the core, outside
   # this model's 50 cm domain, so the detectors sample the flux at the domain edge instead.
-  calibration_height: 25.88        # cm; signals read true power at this critical state
+  calibration_height: 18.70        # cm; signals read true power at this critical state
   detectors:
     lower_port: {position: [44.0, 0.0, -10.0], radius: 3.0}   # stands in for port 4IH (below, outside)
     side_port:  {position: [-44.0, 0.0, 28.5], radius: 3.0}
@@ -198,6 +324,9 @@ instrumentation:
     high_power_w: 6.5e+6           # published
     high_power_no_flow_w: 8.0e+4   # published (no primary flow)
     no_flow_below: 0.05            # relative flow counted as "no flow" (estimate)
+    low_flow_relative: 0.9         # published low-flow scram setpoint, 1800 of 2000 gpm (both
+                                   # pumps); armed above high_power_no_flow_w (simplification of
+                                   # the tech-spec pump-mode logic; 1-pump mode not modeled)
   period_meter_time_constant_s: 3.0     # estimate (log/period amplifiers filter over seconds;
                                         # 1 s made single 0.1-inch steps near critical trip)
   count_rate_meter_time_constant_s: 2.0 # estimate

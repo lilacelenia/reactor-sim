@@ -18,8 +18,11 @@ import scipy.sparse as sp
 from scipy.integrate import solve_ivp
 
 from core_builder import build, load_config
+from parallel import pop_jobs, run_parallel
 from diffusion3d import FACES, Mesh, Problem
 from kinetics3d import BladeProgram, KineticsData, TransientSolver
+
+H0 = float(load_config("mitr2_like.yaml")["transient"]["start_height"])   # critical bank height, cm
 
 KIN = KineticsData()
 
@@ -144,7 +147,7 @@ def test_cube():
 def test_steady(model):
     print("[1] Steady state (nothing moves)")
     for method in ("direct", "pcqs", "adiabatic"):
-        s = TransientSolver(model, BladeProgram(25.9, 0.2, 60, 53), method=method, dt_max=1.0)
+        s = TransientSolver(model, BladeProgram(H0, 0.2, 60, 53), method=method, dt_max=1.0)
         s.run(3.0)
         dev = np.max(np.abs(np.array(s.hist.power) - 1))
         print(f"    {method:9s}: max |P - 1| over 3 s = {dev:.1e}")
@@ -170,7 +173,7 @@ def mitr_model():
     return build(cfg)
 
 
-def mitr_program(h_crit=25.9):
+def mitr_program(h_crit=H0):
     prog = BladeProgram(h0=h_crit, drive_speed=0.2, scram_speed=60.0, travel=53.0)
     prog.command(0.5, h_crit + 0.4)          # 0.4 cm withdrawal at drive speed (2 s)
     prog.scram(4.0)
@@ -184,6 +187,11 @@ def mitr_run(name, model):
     s.run(MITR_T_END)
     np.savez(f"vk_{name}.npz", t=s.hist.t, P=s.hist.power, rho=s.hist.rho, wall=time.time() - t0)
     print(f"    {name:15s} {len(s.hist.t) - 1:5d} steps  {time.time() - t0:6.0f} s", flush=True)
+
+
+def _mitr_run_one(name):
+    """One MITR run in its own process (parallel.run_parallel)."""
+    mitr_run(name, mitr_model())
 
 
 def mitr_compare():
@@ -201,7 +209,7 @@ def mitr_compare():
     print("    errors are evaluated only at time points shared exactly with the reference grid")
     print("    (no interpolation: power falls 6x in 0.1 s during the scram, so interpolating")
     print("    between grid points would itself create percent-level 'errors')")
-    t_scram, t_in = 4.0, 4.0 + 26.3 / 60.0
+    t_scram, t_in = 4.0, 4.0 + (H0 + 0.4) / 60.0
     errs = {}
     for n in ("direct_coarse", "direct_4h", "direct_h", "pcqs_1.0", "pcqs_0.25", "adiabatic_0.25"):
         tt, P = d[n]["t"], d[n]["P"]
@@ -255,22 +263,20 @@ def plot_mitr(npz="verify_kinetics_mitr.npz", out="verify_kinetics_mitr.png"):
 if __name__ == "__main__":
     # python3 verify_kinetics.py                 -> everything, sequentially
     # python3 verify_kinetics.py cube steady     -> fast tests only
-    # python3 verify_kinetics.py run NAME [...]  -> individual MITR runs (to run in parallel)
+    # python3 verify_kinetics.py run [NAME ...] -> MITR runs (all if no names), in parallel
     # python3 verify_kinetics.py compare         -> compare saved MITR runs and plot
-    args = sys.argv[1:] or ["cube", "steady", "mitr"]
+    # --jobs N: processes at a time (default: performance cores, or REACTOR_JOBS)
+    args, jobs = pop_jobs(sys.argv[1:])
+    args = args or ["cube", "steady", "mitr"]
     if args[0] == "run":
-        model = mitr_model()
-        for name in args[1:]:
-            mitr_run(name, model)
+        run_parallel(_mitr_run_one, args[1:] or list(MITR_RUNS), jobs)
         sys.exit()
     if "cube" in args:
         test_cube()
     if "steady" in args:
         test_steady(mitr_model())
     if "mitr" in args:
-        model = mitr_model()
-        for name in MITR_RUNS:
-            mitr_run(name, model)
+        run_parallel(_mitr_run_one, list(MITR_RUNS), jobs)
     if "mitr" in args or "compare" in args:
         mitr_compare()
     print("\nKinetics verification finished.")

@@ -16,27 +16,44 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import PolyCollection
 
+from controller import controller_from_config, regulating_rod_program
 from core_builder import build, load_config
 from kinetics3d import BladeProgram, PlantProgram, TransientSolver, kinetics_from_config
 from thermal import ChannelThermal
 
 
 def make_program(cfg):
+    """Shim bank program, plant program, regulating rod program and power controller (the
+    last two None if the configuration has no regulating rod / controller)."""
     bank, tr = cfg["control"]["shim_bank"], cfg["transient"]
     h0 = float(tr["start_height"])
     prog = BladeProgram(h0, bank["drive_speed"], bank["scram_speed"], bank["travel"])
     plant = PlantProgram()
+    reg = regulating_rod_program(cfg)
+    ctl = controller_from_config(cfg, reg)
     for c in tr.get("commands", []):
+        if ("reg_rod" in c or "auto" in c) and reg is None:
+            raise ValueError("regulating rod commands need control.regulating_rod in the YAML")
+        if "reg_rod" in c:
+            if ctl is not None:
+                ctl.schedule(c["time"], "reg", float(c["reg_rod"]))
+            else:
+                reg.command(c["time"], float(c["reg_rod"]))
+        if "auto" in c:
+            if ctl is None:
+                raise ValueError("'auto' commands need a power_controller section")
+            sp = c.get("setpoint_w")
+            ctl.schedule(c["time"], "auto", (bool(c["auto"]), None if sp is None else float(sp)))
         if c.get("scram"):
             prog.scram(c["time"])
         elif "move" in c:
             prog.command(c["time"], h0 + float(c["move"]))
         elif "target" in c:
             prog.command(c["time"], float(c["target"]))
-        for kind in ("inlet_temperature", "flow"):
+        for kind in PlantProgram.KINDS:
             if kind in c:
                 plant.set(c["time"], kind, c[kind])
-    return prog, plant
+    return prog, plant, reg, ctl
 
 
 def inhour_period(rho, Lam, kin):
@@ -70,7 +87,9 @@ def plot(cfg, model, hist, kin, P0, out_png, feedback):
     ax.grid(alpha=0.3, which="both")
     ax2 = ax.twinx()
     ax2.plot(t, h["blade"], "C0", lw=1.2, label="shim bank height")
-    ax2.set_ylabel("shim bank withdrawal [cm]", color="C0")
+    if len(h["reg_rod"]):
+        ax2.plot(t, h["reg_rod"], "C9", lw=1.0, label="regulating rod")
+    ax2.set_ylabel("withdrawal [cm]", color="C0")
     ax.legend(loc="upper left")
     ax2.legend(loc="upper right")
     for te, txt in hist.events:
@@ -82,7 +101,7 @@ def plot(cfg, model, hist, kin, P0, out_png, feedback):
     if feedback:
         dfb = (h["rho_feedback"] - h["rho_feedback"][0]) / kin.beta
         ax.plot(t, dfb, "C3--", label="temperature feedback")
-        ax.plot(t, h["rho"] / kin.beta - dfb, "C0:", label="blades")
+        ax.plot(t, h["rho"] / kin.beta - dfb, "C0:", label="control rods")
         ax.legend(fontsize=8)
     ax.set_yscale("symlog", linthresh=0.5)          # shows cents and the scram's -$13 together
     ax.set(xlabel="time [s]", ylabel="reactivity [$]  (symlog)", title="Reactivity (adjoint-weighted)")
@@ -164,7 +183,7 @@ def main():
     feedback = bool(tr.get("feedback", True)) and "thermal_hydraulics" in cfg and not args.no_feedback
     kin = kinetics_from_config(cfg)
     model = build(cfg)
-    prog, plant = make_program(cfg)
+    prog, plant, reg, ctl = make_program(cfg)
     P0 = float(tr["initial_power_w"])
     trip = tr.get("trip_power_w")
     thermal = ChannelThermal(model, cfg) if feedback else None
@@ -173,7 +192,8 @@ def main():
     t0 = time.time()
     solver = TransientSolver(model, prog, kin=kin, method=tr["method"], dt_max=tr["dt_max"],
                              dh_max=tr["dh_max"], trip_power=None if trip is None else trip / P0,
-                             thermal=thermal, power_w=P0, plant=plant, verbose=True)
+                             thermal=thermal, power_w=P0, plant=plant, verbose=True,
+                             reg_program=reg, controller=ctl)
     hist = solver.run(float(tr["end_time"]))
     h = hist.arrays()
 
@@ -196,7 +216,7 @@ def main():
               f"feedback {(h['rho_feedback'][i] - h['rho_feedback'][0]) * 1e5:+.1f} pcm since start")
     print(f"Peak power {h['power'].max() * P0:.4g} W; final {h['power'][-1] * P0:.4g} W; "
           f"{len(h['t']) - 1} steps in {time.time() - t0:.0f} s")
-    for te, txt in hist.events:
+    for te, txt in sorted(hist.events + (ctl.messages if ctl is not None else [])):
         print(f"Event at {te:.2f} s: {txt}")
 
     stem = Path(args.config).stem + ("_coarse" if args.coarse else "") + ("" if feedback else "_nofb")

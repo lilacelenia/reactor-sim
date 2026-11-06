@@ -17,9 +17,15 @@ Live mode (quasi-static kinetics + channel thermal feedback in a background thre
   * The shim bank slider is the *commanded* position: blades drive there at the drive speed
     (0.2 cm/s). Fine-step buttons move the target by 0.05 cm. SCRAM drops the blades; after
     a scram (manual or high-power trip) press Reset to start again.
-  * Coolant inlet temperature and flow can be changed while running.
+  * Coolant inlet temperature, pump speed and the number of primary pumps running can be
+    changed while running. Tripping pumps starts a coastdown; with none running the core
+    cools by natural circulation through the natural convection valves (decay heat).
+  * Regulating rod (no scram): +-0.5 cm buttons move it by hand. "Automatic power control"
+    puts it on the controller, which holds the power present at that moment; type another
+    setpoint to change power (slowly: the rod is worth ~124 pcm, ~2 pcm/s at most). A manual
+    rod command or a scram switches automatic control off.
   * Instruments: source-range fission chambers (count rate), period channels, linear power
-    channels, with the MITR scrams (10 s period, 6.5 MW, 80 kW without flow).
+    channels, with the MITR scrams (10 s period, 6.5 MW, 80 kW without flow, low flow).
   * Options: --mesh 4 (default for live; ~3-5x real time) or --mesh 2 (fine, slower than
     real time), --power W (initial power, default from the YAML), --no-feedback,
     --startup (start shut down: blades in, Pu-Be source in, a few counts per second).
@@ -65,6 +71,8 @@ SLICES = {
 FIELDS = {"Element power": None, **SLICES}
 LIVE_FIELDS = {"Element power": None, "Hottest plate temperature": "temp", **SLICES}
 BLADE_COLOR = "#3a7bd5"
+REG_COLOR = "#e67e22"
+REG_STEP = 0.5              # cm per regulating rod button click
 PANEL_WIDTH = 350
 
 
@@ -80,6 +88,7 @@ class CoreViewer(QMainWindow):
         self._build_ui()
         self._draw_static()
         self._draw_blades(self.bank["withdrawn"])
+        self._draw_reg(self.base.reg_default)
         self._draw_elements()
 
         self.debounce = QTimer(self, singleShot=True, interval=250)
@@ -232,6 +241,20 @@ class CoreViewer(QMainWindow):
         self.blade_actor.SetVisibility(self.checks["Blades"].isChecked())
         self._drawn_blade = h
 
+    def _draw_reg(self, r):
+        """Regulating rod: cylinder from its tip (fuel bottom + r) up to the domain top."""
+        if r is None or not np.isfinite(r):
+            return
+        from core_builder import regulating_rod_xy
+        (cx, cy), rad = regulating_rod_xy(self.cfg)
+        z_tip = self.z0 + float(r)
+        cyl = pv.Cylinder(center=(cx, cy, 0.5 * (z_tip + self.z_top)), direction=(0, 0, 1),
+                          radius=rad, height=self.z_top - z_tip, resolution=24)
+        self.reg_actor = self.plotter.add_mesh(cyl, color=REG_COLOR, opacity=0.9, name="reg_rod",
+                                               reset_camera=False)
+        self.reg_actor.SetVisibility(self.checks["Blades"].isChecked())
+        self._drawn_reg = float(r)
+
     def _element_values(self):
         """(per-element values, colorbar title, colormap) for the current element field."""
         spec = self.fields[self.field_box.currentText()]
@@ -337,6 +360,8 @@ class CoreViewer(QMainWindow):
     def _apply_visibility(self, *_):
         for a in self.refl_actors:
             a.SetVisibility(self.checks["Reflector"].isChecked())
+        if getattr(self, "reg_actor", None) is not None:
+            self.reg_actor.SetVisibility(self.checks["Blades"].isChecked())
         self.blade_actor.SetVisibility(self.checks["Blades"].isChecked())
         if hasattr(self, "label_actor"):
             self.label_actor.SetVisibility(self.checks["Labels"].isChecked())
@@ -484,6 +509,7 @@ class LiveViewer(CoreViewer):
         self._build_ui()
         self._draw_static()
         self._draw_blades(self.live.h0)
+        self._draw_reg(self.live.r0)
         self._draw_elements()
         self.live.start(running=False)
 
@@ -554,6 +580,40 @@ class LiveViewer(CoreViewer):
         gl.addWidget(scram_btn)
         panel.addWidget(g)
 
+        self.auto_chk = self.sp_spin = None
+        if live.has_reg:
+            g = QGroupBox("Regulating rod (no scram)")
+            gl = QVBoxLayout(g)
+            self.reg_lbl = QLabel("-")
+            row = QHBoxLayout()
+            self.reg_btns = []
+            for txt, d in ((f"-{REG_STEP} cm", -REG_STEP), (f"+{REG_STEP} cm", REG_STEP)):
+                b = QPushButton(txt)
+                b.clicked.connect(lambda *_, d=d: self._nudge_reg(d))
+                row.addWidget(b)
+                self.reg_btns.append(b)
+            gl.addWidget(self.reg_lbl)
+            gl.addLayout(row)
+            if live.has_controller:
+                self.auto_chk = QCheckBox("Automatic power control")
+                self.auto_chk.toggled.connect(self._on_auto)
+                self.sp_spin = QDoubleSpinBox()
+                self.sp_spin.setRange(0.001, 7000.0)
+                self.sp_spin.setDecimals(3)
+                self.sp_spin.setSuffix(" kW")
+                self.sp_spin.setValue(min(max(live.P0 / 1e3, 0.001), 7000.0))
+                self.sp_spin.editingFinished.connect(self._on_setpoint)
+                row = QHBoxLayout()
+                row.addWidget(self.auto_chk)
+                row.addWidget(QLabel("Setpoint"))
+                row.addWidget(self.sp_spin)
+                gl.addLayout(row)
+                self.ctl_lbl = QLabel("manual")
+                self.ctl_lbl.setWordWrap(True)
+                gl.addWidget(self.ctl_lbl)
+            panel.addWidget(g)
+        self._shown_sp = None
+
         if live.has_instruments:
             g = QGroupBox("Nuclear instruments")
             fl = QFormLayout(g)
@@ -563,9 +623,11 @@ class LiveViewer(CoreViewer):
                 fl.addRow(ch["name"], lbl)
                 self.inst_lbl[ch["name"]] = lbl
             tr = self.cfg["instrumentation"]["trips"]
+            low = (f", flow < {float(tr['low_flow_relative']):.0%} above "
+                   f"{_fmt_w(float(tr['high_power_no_flow_w']))}") if tr.get("low_flow_relative") else ""
             fl.addRow(QLabel(f"Scrams: period < {tr['short_period_s']:g} s, power > "
                              f"{_fmt_w(float(tr['high_power_w']))} "
-                             f"({_fmt_w(float(tr['high_power_no_flow_w']))} without flow)"))
+                             f"({_fmt_w(float(tr['high_power_no_flow_w']))} without flow){low}"))
             self.count_lbl = QLabel("1/M: no counts yet")
             self.count_lbl.setWordWrap(True)
             row = QHBoxLayout()
@@ -598,13 +660,24 @@ class LiveViewer(CoreViewer):
         self.flow_spin.setValue(1.0)
         self.flow_spin.editingFinished.connect(lambda *_: live.set_flow(self.flow_spin.value()))
         fl.addRow("Inlet temperature", self.inlet_spin)
-        fl.addRow("Flow (x nominal)", self.flow_spin)
+        n_pumps = int((self.cfg.get("primary_loop") or {}).get("pumps", 0))
+        self._n_pumps = n_pumps
+        self.pump_box = None
+        if n_pumps:
+            fl.addRow("Pump speed (x nominal)", self.flow_spin)
+            self.pump_box = QComboBox()
+            self.pump_box.addItems([str(n) for n in range(n_pumps, -1, -1)])
+            self.pump_box.setCurrentText(str(n_pumps))
+            self.pump_box.currentTextChanged.connect(lambda s, *_: live.set_pumps(int(s)))
+            fl.addRow("Primary pumps running", self.pump_box)
+        else:
+            fl.addRow("Flow (x nominal)", self.flow_spin)
         g.setEnabled(live.feedback)
         panel.addWidget(g)
 
         self.read = self._readout_group(panel, "Plant status", (
             "Sim time", "Power", "Period", "Reactivity", "Feedback", "Hottest plate",
-            "Core outlet", "Peak element"))
+            "Core outlet", "Primary loop", "Peak element"))
         self._update_slider_label()
 
     # ------------------------------------------------------------------ commands
@@ -623,6 +696,17 @@ class LiveViewer(CoreViewer):
     def _nudge(self, d):
         self.slider.setValue(self.slider.value() + int(round(d * SLIDER_SCALE)))
 
+    def _nudge_reg(self, d):
+        s = self.snap
+        base = s.reg_target if s is not None and np.isfinite(s.reg_target) else self.live.r0
+        self.live.command_reg_rod(base + d)
+
+    def _on_auto(self, checked, *_):
+        self.live.set_auto(checked)          # on: holds the power at this moment
+
+    def _on_setpoint(self, *_):
+        self.live.set_setpoint(self.sp_spin.value() * 1e3)
+
     def _on_run(self, checked):
         self.live.set_running(checked)
         self.run_btn.setText("Pause" if checked else "Run")
@@ -639,6 +723,15 @@ class LiveViewer(CoreViewer):
             w.blockSignals(True)
             w.setValue(v)
             w.blockSignals(False)
+        if self.pump_box is not None:
+            self.pump_box.blockSignals(True)
+            self.pump_box.setCurrentText(str(self._n_pumps))
+            self.pump_box.blockSignals(False)
+        if self.auto_chk is not None:
+            self.auto_chk.blockSignals(True)
+            self.auto_chk.setChecked(False)
+            self.auto_chk.blockSignals(False)
+            self._shown_sp = None
         self.slider.setEnabled(True)
         self.snap = None
         self._last_seq = -1
@@ -666,8 +759,12 @@ class LiveViewer(CoreViewer):
         self._update_readouts(snap)
         self._update_instruments(snap)
         self._update_slider_label()
+        self._update_reg(snap)
         if abs(snap.withdrawn - getattr(self, "_drawn_blade", -1.0)) > 0.005:
             self._draw_blades(snap.withdrawn)
+            self.plotter.render()
+        if np.isfinite(snap.reg_rod) and abs(snap.reg_rod - getattr(self, "_drawn_reg", -1.0)) > 0.005:
+            self._draw_reg(snap.reg_rod)
             self.plotter.render()
         if time.monotonic() - self._last_3d > 0.4:      # throttle the heavier 3D redraws
             self._last_3d = time.monotonic()
@@ -687,12 +784,44 @@ class LiveViewer(CoreViewer):
             r["Feedback"].setText(f"{s.rho_feedback * 1e5:+.1f} pcm since start")
             r["Hottest plate"].setText(f"{s.fuel_max_c:.1f} C")
             r["Core outlet"].setText(f"{s.outlet_c:.1f} C (inlet {s.inlet_c:.1f} C, flow {s.flow:.2f})")
+            loop = f"{s.core_flow_kg_s:.1f} kg/s ({s.flow:.0%})"
+            if self._n_pumps:
+                loop += (f", pumps {s.pumps_running}/{self._n_pumps} at {s.pump_speed:.0%}, "
+                         f"NCVs {'open' if s.ncv_open else 'shut'}")
+            loop += f", decay heat {_fmt_power(s.decay_heat_w)}"
+            r["Primary loop"].setText(loop)
         else:
-            for k in ("Feedback", "Hottest plate", "Core outlet"):
+            for k in ("Feedback", "Hottest plate", "Core outlet", "Primary loop"):
                 r[k].setText("feedback off")
         hot = int(np.argmax(s.element_power))
         r["Peak element"].setText(f"{self.labels[hot]}  ({s.element_power[hot]:.2f} x avg, "
                                   f"{_fmt_power(s.element_power_w[hot])})")
+
+    def _update_reg(self, s):
+        if not self.live.has_reg:
+            return
+        mode = "AUTO" if s.auto else "manual"
+        self.reg_lbl.setText(f"actual {s.reg_rod:.2f} cm, target {s.reg_target:.2f} cm  ({mode}; "
+                             f"{self.live.reg_speed:g} cm/s)")
+        for b in self.reg_btns:
+            b.setEnabled(True)               # a manual command also leaves AUTO
+        if self.auto_chk is None:
+            return
+        if self.auto_chk.isChecked() != s.auto:          # e.g. a scram switched AUTO off
+            self.auto_chk.blockSignals(True)
+            self.auto_chk.setChecked(s.auto)
+            self.auto_chk.blockSignals(False)
+        self.auto_chk.setEnabled(not s.scrammed)
+        if np.isfinite(s.setpoint_w) and s.setpoint_w != self._shown_sp:
+            self._shown_sp = s.setpoint_w             # show the setpoint AUTO actually holds
+            self.sp_spin.blockSignals(True)
+            self.sp_spin.setValue(s.setpoint_w / 1e3)
+            self.sp_spin.blockSignals(False)
+        txt = (f"holding {_fmt_power(s.setpoint_w)}" if s.auto else "manual") + \
+            (f" -- {s.control_message}" if s.control_message else "")
+        if s.reg_at_limit:
+            txt += " -- ROD AT END OF TRAVEL: move the shim bank"
+        self.ctl_lbl.setText(txt)
 
     def _update_instruments(self, s):
         if not self.live.has_instruments:
@@ -727,7 +856,9 @@ class LiveViewer(CoreViewer):
             ap.set_ylabel("power [W]", fontsize=8)
             ap2 = ap.twinx()
             ap2.plot(t, tr["blade"], "C0", lw=1)
-            ap2.set_ylabel("blades [cm]", fontsize=8, color="C0")
+            if self.live.has_reg:
+                ap2.plot(t, tr["reg_rod"], color=REG_COLOR, lw=1)
+            ap2.set_ylabel("blades, reg rod [cm]", fontsize=8, color="C0")
             ap2.tick_params(labelsize=7)
             if self.live.feedback:
                 at.plot(t, tr["fuel_max_c"], "C3", label="hottest plate")

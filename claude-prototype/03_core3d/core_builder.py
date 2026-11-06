@@ -78,21 +78,27 @@ class CoreModel:
     vol_frac: dict                     # material name -> volume fraction array
     mix: dict = None                   # cached data for re-mixing blades (see xs_at)
 
-    def xs_at(self, withdrawn):
-        """Cross sections with the shim bank at `withdrawn` cm. Cheap (no re-rasterizing):
-        only the blade volume fractions change, so this is safe to call every time step."""
-        m = self.mix
-        frac = m["frac_base"].copy()
-        bf = _blade_fraction(m["blade_xy"], m["z_lo"], self.problem.mesh.dz, m["z_fuel_lo"],
-                             m["travel"], m["cusp_q"], withdrawn)
-        frac[..., m["blade_id"]] += bf
-        frac[..., m["fill_id"]] -= bf
-        if frac.min() < -1e-12:
-            raise ValueError("blade overlaps something other than tank water")
-        return _mix_xs(frac, m["mat_vals"])
+    def xs_at(self, withdrawn, reg=None):
+        """Cross sections with the shim bank at `withdrawn` cm and the regulating rod (if the
+        configuration has one) at `reg` cm (None = its configured position). `withdrawn` may
+        also be a sequence with one height per blade (in the order of shim_bank.sides) to
+        move blades individually. Cheap (no re-rasterizing): only the absorber volume
+        fractions change, so this is safe to call every time step."""
+        return _mix_xs(_absorber_fractions(self.mix, self.problem.mesh.dz, withdrawn, reg),
+                       self.mix["mat_vals"])
 
-    def problem_at(self, withdrawn):
-        return Problem(self.problem.mesh, self.xs_at(withdrawn), self.problem.bc)
+    def problem_at(self, withdrawn, reg=None):
+        return Problem(self.problem.mesh, self.xs_at(withdrawn, reg), self.problem.bc)
+
+    @property
+    def has_reg_rod(self):
+        return self.mix.get("reg") is not None
+
+    @property
+    def reg_default(self):
+        """Configured regulating rod position [cm] (None without a regulating rod)."""
+        r = self.mix.get("reg")
+        return None if r is None else r["default"]
 
     @property
     def labels(self):
@@ -125,6 +131,86 @@ def _blade_fraction(blade_xy, z_lo, dz, z_fuel_lo, travel, cusp_q, withdrawn):
     return blade_xy[:, :, None] * z_frac[None, None, :]
 
 
+def _absorber_fractions(mix, dz, withdrawn, reg=None):
+    """Material volume fractions with the shim bank and the regulating rod inserted."""
+    m = mix
+    frac = m["frac_base"].copy()
+    if np.ndim(withdrawn) == 0:                       # whole bank at one height
+        bf = _blade_fraction(m["blade_xy"], m["z_lo"], dz, m["z_fuel_lo"], m["travel"],
+                             m["cusp_q"], withdrawn)
+    else:                                             # one height per blade
+        hs = np.asarray(withdrawn, float)
+        if hs.shape != (len(m["blade_xy_sides"]),):
+            raise ValueError(f"need one height per blade ({len(m['blade_xy_sides'])})")
+        bf = sum(_blade_fraction(bxy, m["z_lo"], dz, m["z_fuel_lo"], m["travel"], m["cusp_q"], h)
+                 for bxy, h in zip(m["blade_xy_sides"], hs))
+    frac[..., m["blade_id"]] += bf
+    frac[..., m["fill_id"]] -= bf
+    r = m.get("reg")
+    if r is not None:
+        rf = _blade_fraction(r["xy"], m["z_lo"], dz, m["z_fuel_lo"], r["travel"], m["cusp_q"],
+                             r["default"] if reg is None else reg)
+        frac[..., r["mat_id"]] += rf
+        frac[..., m["fill_id"]] -= rf
+    if frac.min() < -1e-12:
+        raise ValueError("an absorber overlaps something other than tank water")
+    return frac
+
+
+def regulating_rod_xy(config):
+    """(x, y) centre [cm] and radius of the regulating rod, or None. It stands just outside
+    the core hexagon on the bisector of a corner (`corner_angle`, degrees from +x)."""
+    r = config["control"].get("regulating_rod")
+    if not r:
+        return None
+    ang = np.radians(float(r["corner_angle"]))
+    d = float(r["radial_position"])
+    return np.array([d * np.cos(ang), d * np.sin(ang)]), float(r["radius"])
+
+
+def _blade_mask(X, Y, lat, bank):
+    m = np.zeros(X.shape, bool)
+    for side in bank["sides"]:
+        ang = np.radians(60.0 * side)
+        t = X * np.cos(ang) + Y * np.sin(ang)
+        tang = -X * np.sin(ang) + Y * np.cos(ang)
+        t0 = lat.flat_distance + bank["gap"]
+        m |= (t >= t0) & (t < t0 + bank["thickness"]) & (np.abs(tang) <= lat.hex_side / 2)
+    return m
+
+
+def _reg_rod_xy_fraction(config, mesh, lat, nsub=20):
+    """Volume fraction of each (x, y) cell covered by the regulating rod (fine subsampling:
+    the rod is thin compared with a cell). Checks it touches only tank water."""
+    geo = regulating_rod_xy(config)
+    c, rad = geo
+    tank = float(config["surroundings"]["tank_radius"])
+    if np.hypot(*c) + rad > tank:
+        raise ValueError("regulating rod must lie inside the tank (core_fill water)")
+    off = (np.arange(nsub) + 0.5) / nsub
+    xs = (mesh.x0 + mesh.dx * (np.arange(mesh.nx)[:, None] + off[None, :])).ravel()
+    ys = (mesh.y0 + mesh.dy * (np.arange(mesh.ny)[:, None] + off[None, :])).ravel()
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    rod = np.hypot(X - c[0], Y - c[1]) < rad
+    if np.any(rod & (lat.locate(X, Y) >= 0)):
+        raise ValueError("regulating rod overlaps the core hexagon")
+    if np.any(rod & _blade_mask(X, Y, lat, config["control"]["shim_bank"])):
+        raise ValueError("regulating rod overlaps a shim blade")
+    return rod.reshape(mesh.nx, nsub, mesh.ny, nsub).mean(axis=(1, 3))
+
+
+def _blade_xy_fraction(mesh, lat, bank, nsub=40):
+    """Volume fraction of each (x, y) cell covered by each shim blade, one array per side.
+    Fine subsampling (2 cm / 40 = 0.05 cm): the blades are thinner than the material
+    subsampling pitch, which on some meshes missed whole blades."""
+    off = (np.arange(nsub) + 0.5) / nsub
+    xs = (mesh.x0 + mesh.dx * (np.arange(mesh.nx)[:, None] + off[None, :])).ravel()
+    ys = (mesh.y0 + mesh.dy * (np.arange(mesh.ny)[:, None] + off[None, :])).ravel()
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    return [_blade_mask(X, Y, lat, dict(bank, sides=[sd])).reshape(mesh.nx, nsub, mesh.ny, nsub)
+            .mean(axis=(1, 3)) for sd in bank["sides"]]
+
+
 def _mix_xs(frac, mat_vals):
     xs = {}
     for name in XS_NAMES:
@@ -141,8 +227,9 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def build(config, blade_withdrawn=None):
-    """Rasterize the configuration. blade_withdrawn overrides the shim bank position [cm]."""
+def build(config, blade_withdrawn=None, reg_withdrawn=None):
+    """Rasterize the configuration. blade_withdrawn overrides the shim bank position [cm],
+    reg_withdrawn the regulating rod's [cm] (both become the model's defaults)."""
     mc = config["mesh"]
     h = float(mc["cell_size"])
     hw = float(mc["half_width"])
@@ -181,14 +268,9 @@ def build(config, blade_withdrawn=None):
     # shim blades: slabs just outside each hexagon flat
     bank = config["control"]["shim_bank"]
     withdrawn = bank["withdrawn"] if blade_withdrawn is None else blade_withdrawn
-    withdrawn = float(np.clip(withdrawn, 0.0, bank["travel"]))
-    blade2d = np.zeros(X.shape, bool)
-    for side in bank["sides"]:
-        ang = np.radians(60.0 * side)
-        t = X * np.cos(ang) + Y * np.sin(ang)
-        tang = -X * np.sin(ang) + Y * np.cos(ang)
-        t0 = lat.flat_distance + bank["gap"]
-        blade2d |= (t >= t0) & (t < t0 + bank["thickness"]) & (np.abs(tang) <= lat.hex_side / 2)
+    withdrawn = np.clip(np.asarray(withdrawn, float), 0.0, bank["travel"])
+    if withdrawn.ndim == 0:
+        withdrawn = float(withdrawn)
 
     z_fuel_lo = float(core["fuel_bottom"])
     z_fuel_hi = z_fuel_lo + float(core["fuel_height"])
@@ -229,19 +311,24 @@ def build(config, blade_withdrawn=None):
                 W_vals.append(layer_fuel[c, e] / tot[c])
 
     frac_base = counts / ns**3                    # everything except the blades
-    blade_xy = blade2d.reshape(nxy, ns, nxy, ns).mean(axis=(1, 3))          # xy volume fraction
+    blade_xy_sides = _blade_xy_fraction(mesh, lat, bank)                    # xy volume fractions
+    blade_xy = sum(blade_xy_sides)
+    if blade_xy.max() > 1 + 1e-12 or np.any(_blade_mask(X, Y, lat, bank) & (elem2d >= 0)):
+        raise ValueError("shim blades overlap each other or the core hexagon")
     mat_vals = {name: np.array([config["materials"][m].get(name, 0.0) for m in mats], float)
                 for name in XS_NAMES}
-    mix = dict(frac_base=frac_base, blade_xy=blade_xy, z_lo=mesh.z0 + h * np.arange(nz),
+    mix = dict(frac_base=frac_base, blade_xy=blade_xy, blade_xy_sides=blade_xy_sides, z_lo=mesh.z0 + h * np.arange(nz),
                z_fuel_lo=z_fuel_lo, travel=float(bank["travel"]),
                cusp_q=float(bank.get("cusping_flux_ratio", 1.0)),
-               blade_id=mid[bank["material"]], fill_id=mid[sur["core_fill"]], mat_vals=mat_vals)
-    frac = frac_base.copy()
-    bf = _blade_fraction(blade_xy, mix["z_lo"], h, z_fuel_lo, mix["travel"], mix["cusp_q"], withdrawn)
-    frac[..., mix["blade_id"]] += bf
-    frac[..., mix["fill_id"]] -= bf
-    if frac.min() < -1e-12:
-        raise ValueError("blade overlaps something other than tank water")
+               blade_id=mid[bank["material"]], fill_id=mid[sur["core_fill"]], mat_vals=mat_vals,
+               reg=None)
+    rr = config["control"].get("regulating_rod")
+    if rr:
+        travel_r = float(rr["travel"])
+        h_r = float(rr["withdrawn"]) if reg_withdrawn is None else float(reg_withdrawn)
+        mix["reg"] = dict(xy=_reg_rod_xy_fraction(config, mesh, lat), travel=travel_r,
+                          default=float(np.clip(h_r, 0.0, travel_r)), mat_id=mid[rr["material"]])
+    frac = _absorber_fractions(mix, h, withdrawn)
     xs = _mix_xs(frac, mat_vals)
 
     b = config["boundary"]
