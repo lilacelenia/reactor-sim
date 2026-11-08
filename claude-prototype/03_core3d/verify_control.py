@@ -2,7 +2,7 @@
 verify_control.py -- regulating rod and automatic power controller.
 
 [1] Worth (2 cm mesh, static eigenvalues): integral worth at the critical bank height vs the
-    published HEU value it is calibrated to (124 pcm); worth curve; shadowing (worth vs bank
+    measured core 2 value (228 pcm; not fitted, within 20 %); worth curve; shadowing (worth vs bank
     height) vs the published trend; tech-spec limits for a device on an automatic
     controller (available positive reactivity < 0.5 % dk/k; insertion rate < 5e-4 dk/k/s).
 [2] Kinetics (4 cm mesh, zero power): the rod is withdrawn 10 cm by hand (nominal-7 -> nominal+3). The
@@ -119,9 +119,9 @@ def test_worth():
     W = integral_worth(model, h_c)
     pub = float(rr["published_worth_pcm"]) * 1e-5
     print(f"    critical bank (rod at {r0:g} cm): {h_c:.3f} cm")
-    print(f"    integral worth {W * 1e5:.2f} pcm vs published HEU value {pub * 1e5:.0f} pcm "
-          f"(the calibration target): {abs(W / pub - 1):.1e}")
-    assert abs(W / pub - 1) < 2e-3
+    print(f"    integral worth {W * 1e5:.2f} pcm vs measured core 2 value {pub * 1e5:.0f} pcm "
+          f"(not fitted): {(W / pub - 1) * 100:+.1f} %")
+    assert abs(W / pub - 1) < 0.2
     # worth curve at the critical bank
     hs = np.linspace(0.0, travel, 23)
     ks, g = [], None

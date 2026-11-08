@@ -3,7 +3,7 @@
 #
 # Geometry follows the published MITR-II layout: a hexagonal light-water core of 27
 # rhomboid fuel positions in three rings (A: 3, B: 9, C: 15), plate fuel elements with a
-# 57 cm fueled length, six borated-stainless shim blades (one per hexagon side, 53 cm
+# 56.83 cm fueled length, six borated-stainless shim blades (one per hexagon side, 53.34 cm
 # travel), a cadmium regulating rod at one corner of the core, and a surrounding heavy-water
 # reflector with graphite beyond it.
 #
@@ -30,16 +30,24 @@ core:
   lattice: hex_rhombus     # hexagon of side 3*s tiled by 27 rhombi (60/120 degree)
   element_side: 7.0        # cm, rhombus side incl. inter-element gap (estimate)
   fuel_bottom: 0.0         # cm
-  fuel_height: 57.0        # cm, fueled length of the HEU element
+  fuel_height: 56.83       # cm, HEU fuel meat length 22.375 in (ANL/RERTR/TM-10-41, 2.2)
   default_element: fuel
-  # Positions are labeled by ring (A/B/C) and counted counter-clockwise from +x.
-  # NOTE: this numbering is this program's convention, not the MITR facility numbering.
-  # The published operating practice keeps ~3 positions (two in A ring, one in B ring)
-  # as solid aluminum dummies or in-core experiments to limit power peaking.
+  # Position names follow the MITR facility (ANL/RERTR/TM-10-41, Fig. 2-7): per ring,
+  # clockwise seen from the top, starting at the regulating-rod corner. The three A-ring
+  # rhombi are turned 60 degrees from the B/C sector tiling, as in the figure (A1 points at
+  # the regulating rod; A2, A3 follow clockwise).
+  position_numbering: mitr
+  inner_ring_rotated: true
+  # Reference loading: MITR-II HEU core 2 (first critical 9 Mar 1976; TM-10-41 2.3.2 and
+  # Table 4-1): 22 fresh elements, five solid aluminum dummies, no fixed absorbers.
+  # Not modeled: the Cd blades present at the start of core 2 (replaced one at a time with
+  # ~1 % boron BSS blades during the core); all six are modeled as BSS here.
   positions:
     A-2: dummy_al
     A-3: dummy_al
-    B-5: dummy_al
+    B-3: dummy_al
+    B-6: dummy_al
+    B-9: dummy_al
 
 surroundings:
   core_fill: h2o           # water around/above/below elements inside the core tank
@@ -58,23 +66,33 @@ control:
     gap: 0.4               # cm between hexagon flat and blade (estimate)
     thickness: 0.6         # cm (estimate)
     material: blade
-    travel: 53.0           # cm, published total travel
-    withdrawn: 18.7        # cm, current position (0 = fully inserted)
-    # Published HEU values the blades are fitted to / compared with (HEU SAR Table 4-4 and
-    # MCNP results, quoted in ANL/RERTR/TM-10-40, Tables 1, 4, 12, 13). verify_blades.py
-    # fits materials.blade.Sa2 (Sa1 = Sa1_over_Sa2 * Sa2) and the fuel nSf1/nSf2 to the
-    # first two; the rest are independent checks.
+    travel: 53.34          # cm, published: 21 in (TM-10-41 2.3: tips 10.25 in below to 10.75 in
+                           # above the reactor median plane)
+    inserted_tip_above_fuel_bottom: 2.38  # cm. Published: inserted tips 10.25 in below the
+                           # median plane. Estimate: the median plane is taken as the fuel-meat
+                           # centre (28.415 cm), so 28.415 - 26.035 = 2.38 cm. Bank heights
+                           # ('withdrawn') are measured from this inserted position, like MITR's.
+    withdrawn: 21.08       # cm, current position (0 = fully inserted)
+    # Published values for HEU core 2 (ANL/RERTR/TM-10-41). verify_blades.py fits
+    # materials.blade.Sa2 (Sa1 = Sa1_over_Sa2 * Sa2) and the fuel nSf1/nSf2 scale to the
+    # first two; everything else is an independent check.
     published:
-      bank_worth_pcm: 9927.0          # fit target: shim bank integral worth (12.63 beta)
-      critical_height_in: 7.36        # fit target: HEU core 1 initial critical bank height
-      pcm_per_beta: 786.0             # 9927 pcm / 12.63 beta, as the report converts
-      excess_reactivity_beta: [6.0, 7.0]   # "typical" HEU excess reactivity
-      bank_worth_typical_pcm: 10061.0      # typical bank worth (12.8 beta) ...
-      bank_5in_to_out_pcm: 7388.0          # ... of which 5 in -> fully out (9.4 beta)
-      single_blade_worth_pcm: 1776.0       # blade #5 integral worth (2.26 beta)
-      single_blade_5in_to_out_pcm: 1258.0  # one blade, 5 in -> fully out (1.6 beta)
-      shutdown_margin_pct: [3.35, 3.56]    # HEU core 2, 5 blades in, one out, reg rod out
-      shutdown_margin_min_pct: 1.0         # tech-spec minimum
+      critical_height_in: 8.3         # fit target: measured core 2 BOC critical bank height
+                                      # (Table 4-2; Table 4-1 gives 8.6, the 2010 RERTR paper 8.5)
+      single_blade_worths_pcm: [2222.0, 2161.0, 2161.0, 2377.0, 2377.0, 2222.0]
+                                      # MITR blades 1-6, measured or symmetric (Table 4-6); fit
+                                      # target: their mean, 2253 pcm. Individual values: check
+      pcm_per_beta: 786.0             # 9927 pcm / 12.63 beta, as the HEU SAR converts
+      shutdown_margin_pct: [3.35, 3.49, 3.56, 3.55, 3.50, 3.37]
+                                      # MITR blades 1-6 stuck out, others in, reg rod out:
+                                      # MCNP for core 2 (Table 4-11), NOT measured
+      shutdown_margin_min_pct: 1.0    # tech-spec minimum
+      bank_worth_pcm:                 # integral shim bank worth -- sources disagree:
+        mcnp_core2: 12642.0           #   MCNP core 2 (Table 4-8)
+        startup_report: [13362.0, 15120.0]  # 1975-76 startup report (quoted in TM-10-41)
+        heu_sar: 9927.0               #   HEU SAR Table 4-4 (core not stated)
+      excess_reactivity_beta_modern: [6.0, 7.0]  # "typical" for modern burned cores, not
+                                      # core 2 (fresh, more fuel); shown for context only
     Sa1_over_Sa2: 0.03     # blade fast/thermal absorption ratio kept in the fit (estimate)
     cusping_flux_ratio: 0.15  # rodded/unrodded flux ratio for partially rodded cells;
                               # 1.0 = plain volume weighting (strong rod cusping)
@@ -84,15 +102,19 @@ control:
     # Published (MITR): one regulating rod, cadmium on an aluminum rod; a low-worth device
     # used to hold power, moved by hand or by an automatic controller; no scram capability
     # (tech specs ML102320068, 1.3.31). It stands at a corner of the core hexagon, between
-    # shim blades 1 and 6 (MITR core maps; ANL HEU/LEU benchmark report, ANL pub. 68856). HEU SAR integral
-    # worth 124 pcm (158 mbeta), quoted in the ANL HEU/LEU conversion analysis (OSTI 1008288).
+    # shim blades 1 and 6 (MITR core maps; ANL HEU/LEU benchmark report, ANL pub. 68856).
+    # Integral worth, measured: core 2, bank at 8.5 in: 228 pcm; core 1: 134 pcm (bank 7.5 in)
+    # and 269 pcm (16.8 in) (TM-10-41 Tables 4-9, 4-10). HEU SAR: 124 pcm (core not stated).
     # Tech-spec limits (3.2.2): a device on an automatic controller may hold < 0.5 % dk/k of
     # available positive reactivity; controlled insertion rate < 5e-4 dk/k/s.
     # Estimates: which corner (program convention), radial position, radius, travel, drive
     # speed, the nominal position, and the equivalent absorber constants (material reg_rod),
-    # whose Sa2 is calibrated so the integral worth is 124 pcm on the 2 cm mesh with the shim
-    # bank at its critical height (python3 verify_control.py calibrate).
+    # whose Sa2 makes the rod nearly black (cadmium). Not fitted to core 2: even a black rod of
+    # this (estimated) radius is worth only ~208 pcm at the core 2 critical bank vs the measured
+    # 228 pcm, so verify_control.py compares instead (python3 verify_control.py calibrate
+    # would fit Sa2 to published_worth_pcm when that is reachable).
     corner_angle: 330.0    # deg from +x: the corner between the blades on sides 0 and 5
+                           # (MITR blades 6 and 1; Fig. 2-7). Program side s = MITR blade 6 - s
     radial_position: 23.0  # cm from the core axis (hexagon corner at 21 cm, tank wall at 24 cm)
     radius: 0.9            # cm (estimate)
     material: reg_rod
@@ -101,7 +123,7 @@ control:
                            # blades shadow the rod, so above the tip it is worth almost nothing
                            # (published MITR trend: its worth grows as the bank is withdrawn)
     drive_speed: 0.5       # cm/s (estimate; worth rate ~2 pcm/s, far below the tech-spec limit)
-    published_worth_pcm: 124.0
+    published_worth_pcm: 228.0   # core 2, measured (TM-10-41 Table 4-10)
 
 power_controller:
   # Automatic power controller driving the regulating rod (estimates: no MITR controller
@@ -131,7 +153,7 @@ kinetics:
 
 transient:                 # scenario for run_transient.py
   method: pcqs             # pcqs (recommended) | adiabatic | direct
-  start_height: 18.70      # cm; the critical bank height (2 cm mesh, regulating rod at 15 cm)
+  start_height: 21.08      # cm; the critical bank height (2 cm mesh, regulating rod at 15 cm)
   initial_power_w: 1.0e+6   # starts in steady state at this power (temperatures included)
   feedback: true           # thermal feedback (needs the thermal_hydraulics section)
   end_time: 640.0          # s
@@ -150,13 +172,13 @@ transient:                 # scenario for run_transient.py
 
 materials:                 # two-group constants, cm and 1/cm (illustrative)
   fuel:                    # homogenized HEU Al-clad plate element + coolant channels,
-    D1: 1.33               # representative of a mid-life (partly burned) core
+    D1: 1.33               # textbook-style values; nSf fitted to fresh HEU core 2
     D2: 0.28
     Sa1: 0.0030
     Sa2: 0.290
     Ss12: 0.0270
-    nSf1: 0.0025772        # fitted with the blades: 0.99124 x the earlier estimates
-    nSf2: 0.484717         # (0.0026, 0.489) so the bank is critical at the published 7.36 in
+    nSf1: 0.002691444      # fitted with the blades: 1.044329 x the previous fit (0.0025772,
+    nSf2: 0.506204         # 0.484717) so the bank is critical at the measured core 2 8.3 in
   dummy_al:                # solid aluminum element
     D1: 1.60
     D2: 3.40
@@ -191,17 +213,17 @@ materials:                 # two-group constants, cm and 1/cm (illustrative)
     nSf2: 0.0
   reg_rod:                 # cadmium: strong thermal absorber, nearly transparent to fast
     D1: 1.00               # neutrons. "Equivalent" constants like the blades'; Sa2 is
-    D2: 0.30               # calibrated to the published integral worth (see control)
+    D2: 0.30               # set nearly black (see control.regulating_rod)
     Sa1: 0.005
-    Sa2: 17.3035           # calibrated: 124.00 pcm on the 2 cm mesh (verify_control.py calibrate)
+    Sa2: 17.3035           # earlier fit to the SAR 124 pcm; ~197 pcm in core 2 (2 cm mesh)
     Ss12: 0.0
     nSf1: 0.0
     nSf2: 0.0
   blade:                   # borated stainless steel. A thin near-black absorber is outside
     D1: 1.00               # diffusion theory's validity, so these are "equivalent" values.
-    D2: 0.30               # Sa2 is FITTED (with the fuel nSf) to the published HEU bank worth
-    Sa1: 0.0371181         # 9927 pcm and critical height 7.36 in on the 2 cm mesh
-    Sa2: 1.23727           # (python3 verify_blades.py calibrate); Sa1 = 0.03 Sa2 (estimate)
+    D2: 0.30               # Sa2 is FITTED (with the fuel nSf) to the measured core 2 mean
+    Sa1: 0.0521825         # single-blade worth 2253 pcm and critical height 8.3 in, 2 cm mesh
+    Sa2: 1.73942           # (python3 verify_blades.py calibrate); Sa1 = 0.03 Sa2 (estimate)
     Ss12: 0.0
     nSf1: 0.0
     nSf2: 0.0
@@ -302,7 +324,7 @@ instrumentation:
   # 100 kW; trips below. Detector positions, sensitivities, dead time and meter time
   # constants are estimates. The real detector ports are ~4-5 ft from the core, outside
   # this model's 50 cm domain, so the detectors sample the flux at the domain edge instead.
-  calibration_height: 18.70        # cm; signals read true power at this critical state
+  calibration_height: 21.08        # cm; signals read true power at this critical state
   detectors:
     lower_port: {position: [44.0, 0.0, -10.0], radius: 3.0}   # stands in for port 4IH (below, outside)
     side_port:  {position: [-44.0, 0.0, 28.5], radius: 3.0}

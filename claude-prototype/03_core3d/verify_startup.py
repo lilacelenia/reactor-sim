@@ -238,8 +238,14 @@ def test_instruments():
     # past 80 kW without flow then trips the high-flux scram
     plant = PlantProgram()
     plant.set(5.0, "pumps", 0)
+    # step worth 280 pcm (static, linear in height), after natural circulation has settled:
+    # enough to pass 80 kW against the feedback, below the ~330 pcm of a 10 s asymptotic period
+    from diffusion3d import solve_k
+    k0 = solve_k(model.problem_at(H0), tol_k=1e-9, tol_src=1e-8)
+    k1 = solve_k(model.problem_at(H0 + 1.0), tol_k=1e-9, tol_src=1e-8, guess=k0)
+    dh = 280e-5 / (1 / k0.k - 1 / k1.k)
     prog = BladeProgram(H0, 0.2, 60.0, 53.0)
-    prog.command(400.0, H0 + 1.0)                    # ~190 pcm, after natural circulation has settled
+    prog.command(400.0, H0 + dh)
     s = TransientSolver(model, prog, kin=kin, thermal=ChannelThermal(model, cfg), power_w=5.0e4,
                         dt_max=5.0, plant=plant)
     inst.reset()
@@ -247,7 +253,7 @@ def test_instruments():
     ev = s.hist.events
     i400 = int(np.searchsorted(s.hist.t, 400.0))
     print(f"    50 kW, pumps trip at 5 s (no scram: below 80 kW; natural-circulation flow "
-          f"{s.hist.core_flow[i400]:.2f} kg/s at 400 s), +1.0 cm at 400 s: "
+          f"{s.hist.core_flow[i400]:.2f} kg/s at 400 s), +{dh:.2f} cm (280 pcm) at 400 s: "
           f"{ev[0][1] if ev else 'no trip'} at {ev[0][0] if ev else float('nan'):.1f} s")
     assert ev and "without primary flow" in ev[0][1] and ev[0][0] > 400.0
 

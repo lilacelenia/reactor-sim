@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from core_builder import build
+from core_builder import blade_tip_zero, build
 from diffusion3d import solve_k
 
 
@@ -42,9 +42,9 @@ def element_prisms(lattice, z0, height, shrink=0.94):
 
 def blade_boxes(cfg, lattice, withdrawn, z_top):
     """Points and face array for the shim blades: one slab per hexagon side,
-    from the blade tip (fuel bottom + withdrawn) up to z_top."""
+    from the blade tip (inserted tip position + withdrawn) up to z_top."""
     bank = cfg["control"]["shim_bank"]
-    z_tip = cfg["core"]["fuel_bottom"] + float(np.clip(withdrawn, 0, bank["travel"]))
+    z_tip = blade_tip_zero(cfg) + float(np.clip(withdrawn, 0, bank["travel"]))
     t0 = lattice.flat_distance + bank["gap"]
     t1 = t0 + bank["thickness"]
     half = lattice.hex_side / 2

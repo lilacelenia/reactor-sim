@@ -3,3 +3,5 @@ __pycache__/
 .DS_Store
 .venv/
 claude-prototype/03_core3d/results/
+claude-prototype/03_core3d/*.npz
+claude-prototype/03_core3d/*.png

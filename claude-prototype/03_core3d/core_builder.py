@@ -26,8 +26,15 @@ class HexRhombusLattice:
     330 degrees); each sector is an n x n grid of 60/120-degree rhombi. Ring index of
     rhombus (i, j) is max(i, j), giving 3, 9, 15, ... elements per ring (n=3 -> 27, MITR)."""
 
-    def __init__(self, side, n_rings=3):
+    def __init__(self, side, n_rings=3, inner_rotated=False, numbering=None):
+        """inner_rotated: tile the innermost ring (the hexagon of side s at the centre) with
+        its three rhombi turned 60 degrees from the sector tiling, as in MITR (Fig. 2-7 of
+        ANL/RERTR/TM-10-41: A1 points at the regulating-rod corner, while the B/C sectors
+        split there). numbering: None = per ring counter-clockwise from +x (this program's
+        convention); a number = per ring clockwise starting at that angle [deg], which is
+        the MITR convention when the angle is the regulating-rod corner."""
         self.s, self.n = side, n_rings
+        self.inner_rotated = bool(inner_rotated)
         ang = np.radians([90.0, 210.0, 330.0])
         self.e = np.stack([np.cos(ang), np.sin(ang)], axis=1)            # unit vectors
         # inverse basis for each sector k: p = u*e_k + v*e_(k+1)
@@ -40,12 +47,23 @@ class HexRhombusLattice:
                 for j in range(n_rings):
                     o = i * a + j * b
                     verts = np.array([o, o + a, o + a + b, o + b])
+                    if self.inner_rotated and i == 0 and j == 0:
+                        verts = verts @ _rot(60.0).T
                     elems.append(dict(sector=k, i=i, j=j, ring=max(i, j),
                                       center=verts.mean(0), verts=verts))
-        # label within each ring by angle, counter-clockwise from +x
+        # label within each ring by angle
+        if numbering is None:                               # counter-clockwise from +x
+            def key(e):
+                return np.arctan2(e["center"][1], e["center"][0]) % (2 * np.pi)
+        else:                                               # clockwise from `numbering`
+            a0 = np.radians(float(numbering))
+
+            def key(e):
+                a = (a0 - np.arctan2(e["center"][1], e["center"][0])) % (2 * np.pi)
+                return 0.0 if a > 2 * np.pi - 1e-9 else a  # an element on the start ray is 1st
         for ring in range(n_rings):
             members = [e for e in elems if e["ring"] == ring]
-            members.sort(key=lambda e: np.arctan2(e["center"][1], e["center"][0]) % (2 * np.pi))
+            members.sort(key=key)
             for rank, e in enumerate(members, 1):
                 e["label"] = f"{RING_LETTERS[ring]}-{rank}"
         self.elements = elems
@@ -64,7 +82,24 @@ class HexRhombusLattice:
             i = np.floor(u[inside] / self.s).astype(int)
             j = np.floor(v[inside] / self.s).astype(int)
             out[inside] = k * self.n**2 + i * self.n + j      # matches construction order
+        if self.inner_rotated:
+            # the centre hexagon is the same region; re-split it with the rotated tiling:
+            # p lies in rotated rhombus k exactly when R(-60) p lies in the unrotated one
+            centre = np.isin(out, [k * self.n**2 for k in range(3)])
+            if centre.any():
+                q = _rot(-60.0) @ np.stack([x[centre], y[centre]])
+                for k in range(3):
+                    u, v = self.inv[k] @ q
+                    hit = (u >= 0) & (u < self.s) & (v >= 0) & (v < self.s)
+                    sub = out[centre]
+                    sub[hit] = k * self.n**2
+                    out[centre] = sub
         return out
+
+
+def _rot(deg):
+    a = np.radians(deg)
+    return np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
 
 
 # ----------------------------------------------------------------------------- model
@@ -119,6 +154,13 @@ class CoreModel:
         return contrib.sum(axis=(0, 1))
 
 
+def blade_tip_zero(config):
+    """z [cm] of the shim-blade tips when fully inserted (withdrawn = 0): the fuel bottom
+    plus shim_bank.inserted_tip_above_fuel_bottom (0 if absent)."""
+    return (float(config["core"]["fuel_bottom"])
+            + float(config["control"]["shim_bank"].get("inserted_tip_above_fuel_bottom", 0.0)))
+
+
 def _blade_fraction(blade_xy, z_lo, dz, z_fuel_lo, travel, cusp_q, withdrawn):
     """Blade volume fraction per cell. Blade tips are placed analytically in z so k varies
     smoothly with bank position (sampling the tip would make k a staircase)."""
@@ -136,13 +178,13 @@ def _absorber_fractions(mix, dz, withdrawn, reg=None):
     m = mix
     frac = m["frac_base"].copy()
     if np.ndim(withdrawn) == 0:                       # whole bank at one height
-        bf = _blade_fraction(m["blade_xy"], m["z_lo"], dz, m["z_fuel_lo"], m["travel"],
+        bf = _blade_fraction(m["blade_xy"], m["z_lo"], dz, m["z_blade0"], m["travel"],
                              m["cusp_q"], withdrawn)
     else:                                             # one height per blade
         hs = np.asarray(withdrawn, float)
         if hs.shape != (len(m["blade_xy_sides"]),):
             raise ValueError(f"need one height per blade ({len(m['blade_xy_sides'])})")
-        bf = sum(_blade_fraction(bxy, m["z_lo"], dz, m["z_fuel_lo"], m["travel"], m["cusp_q"], h)
+        bf = sum(_blade_fraction(bxy, m["z_lo"], dz, m["z_blade0"], m["travel"], m["cusp_q"], h)
                  for bxy, h in zip(m["blade_xy_sides"], hs))
     frac[..., m["blade_id"]] += bf
     frac[..., m["fill_id"]] -= bf
@@ -227,6 +269,18 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
+def make_lattice(config):
+    """Lattice per core.inner_ring_rotated and core.position_numbering ('program': counter-
+    clockwise from +x; 'mitr': clockwise from the regulating-rod corner, as the facility)."""
+    core = config["core"]
+    numbering = None
+    if core.get("position_numbering", "program") == "mitr":
+        numbering = float(config["control"]["regulating_rod"]["corner_angle"])
+    return HexRhombusLattice(float(core["element_side"]), 3,
+                             inner_rotated=bool(core.get("inner_ring_rotated", False)),
+                             numbering=numbering)
+
+
 def build(config, blade_withdrawn=None, reg_withdrawn=None):
     """Rasterize the configuration. blade_withdrawn overrides the shim bank position [cm],
     reg_withdrawn the regulating rod's [cm] (both become the model's defaults)."""
@@ -242,7 +296,7 @@ def build(config, blade_withdrawn=None, reg_withdrawn=None):
     mid = {name: i for i, name in enumerate(mats)}
 
     core = config["core"]
-    lat = HexRhombusLattice(float(core["element_side"]), 3)
+    lat = make_lattice(config)
     labels = {e["label"]: i for i, e in enumerate(lat.elements)}
     elem_mat = [core["default_element"]] * len(lat.elements)
     for label, m in (core.get("positions") or {}).items():
@@ -318,7 +372,7 @@ def build(config, blade_withdrawn=None, reg_withdrawn=None):
     mat_vals = {name: np.array([config["materials"][m].get(name, 0.0) for m in mats], float)
                 for name in XS_NAMES}
     mix = dict(frac_base=frac_base, blade_xy=blade_xy, blade_xy_sides=blade_xy_sides, z_lo=mesh.z0 + h * np.arange(nz),
-               z_fuel_lo=z_fuel_lo, travel=float(bank["travel"]),
+               z_fuel_lo=z_fuel_lo, z_blade0=blade_tip_zero(config), travel=float(bank["travel"]),
                cusp_q=float(bank.get("cusping_flux_ratio", 1.0)),
                blade_id=mid[bank["material"]], fill_id=mid[sur["core_fill"]], mat_vals=mat_vals,
                reg=None)

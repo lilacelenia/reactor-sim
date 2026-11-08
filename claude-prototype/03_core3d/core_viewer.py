@@ -59,7 +59,7 @@ from PySide6.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from core_builder import build, load_config
+from core_builder import blade_tip_zero, build, load_config
 from instruments import _fmt_w
 from viewer_core import SimController, blade_boxes, element_prisms
 
@@ -382,7 +382,7 @@ class CoreViewer(QMainWindow):
             m = prof > 0
             # scale so the curve's mean equals the element's relative power
             self.ax.plot(prof[m] / prof[m].mean() * self.snap.element_power[i], z[m], "o-", ms=2.5)
-            self.ax.axhline(self.z0 + self.snap.withdrawn, color=BLADE_COLOR, ls="--", lw=1,
+            self.ax.axhline(blade_tip_zero(self.cfg) + self.snap.withdrawn, color=BLADE_COLOR, ls="--", lw=1,
                             label="blade tips")
             self.ax.legend(fontsize=7)
         self.ax.set_title(f"{label}  (element power {self.snap.element_power[i]:.2f})", fontsize=9)

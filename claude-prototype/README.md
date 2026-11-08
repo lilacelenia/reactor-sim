@@ -4,12 +4,13 @@ A step-by-step build of a nuclear reactor simulator in Python, from a point-kine
 up to a 3D, time-dependent, thermally coupled core based on an MITR-II-like configuration.
 
 > **Illustrative, not licensing-grade.** The MITR-II geometry follows published data
-> (27 rhomboid positions in rings of 3/9/15, 57 cm fueled length, six shim blades with
-> 53 cm travel, a cadmium regulating rod at a core corner, D2O reflector, 6 MW, 2000 gpm
+> (27 rhomboid positions in rings of 3/9/15 with MITR's position numbering, 56.83 cm fueled
+> length, six shim blades with 21 in travel, a cadmium regulating rod at a core corner, D2O reflector, 6 MW, 2000 gpm
 > normal flow from two pumps, four natural convection valves). Decay heat uses the
-> published ANS-5.1-1979 standard; the shim blades' absorber and the fuel's nu-Sigma_f are
-> fitted to the published HEU bank worth (9927 pcm) and critical bank height (7.36 in); the
-> regulating rod's absorber is calibrated to its published 124 pcm worth. Cross sections,
+> published ANS-5.1-1979 standard; the reference loading is HEU core 2 (1976: 22 elements,
+> five aluminum dummies, no fixed absorbers), and the shim blades' absorber and the fuel's
+> nu-Sigma_f are fitted to its measured critical bank height (8.3 in) and mean single-blade
+> worth (2253 pcm). Cross sections,
 > feedback coefficients, thermal and pump parameters are textbook-style **estimates**, marked
 > "estimate" in `03_core3d/mitr2_like.yaml`. Results show realistic behavior, not MITR's
 > actual numbers.
@@ -64,7 +65,7 @@ Run everything from inside `03_core3d/`.
 | `multigrid.py` | Smoothed-aggregation algebraic multigrid preconditioner (2x2x2 aggregates on the structured mesh, Galerkin coarse grids, Jacobi-smoothed V-cycle) for CG on fine meshes |
 | `parallel.py` | Process pool for independent runs: counts Apple Silicon performance cores, one BLAS thread per process |
 | `verify_startup.py` | Startup checks: exact source-driven kinetics, source steady state, instruments and trips, scripted approach to criticality |
-| `verify_blades.py` | Shim blade checks: exact blade areas on every mesh, individual blade positions, fit to the published HEU bank worth and critical height, and comparison with published values that were not fitted (excess reactivity, single-blade worths, shutdown margin); `calibrate` refits blades and fuel |
+| `verify_blades.py` | Shim blade checks: exact blade areas on every mesh, individual blade positions, MITR position labels vs the facility core map, fit to the HEU core 2 critical height and mean single-blade worth, and comparison with published values that were not fitted (each blade's worth, shutdown margin, bank worth); `calibrate` refits blades and fuel |
 | `verify_control.py` | Regulating rod and controller checks: worth vs published value and tech-spec limits, inhour, closed loop vs static searches, PCQS vs extrapolated direct reference; `calibrate` refits the rod absorber |
 | `results/` | Figures and data from the runs below |
 
@@ -205,20 +206,31 @@ pump-loop drop to the heat exchangers, and the check-valve factor. No MITR coast
 was found. The plant starts in decay-heat equilibrium (long operation). Commands in the
 YAML scenario: `{time: t, pumps: 0}` trips both pumps.
 
-#### Shim blades: fitted to published HEU worths
-Published (HEU SAR Table 4-4 and MCNP values quoted in ANL/RERTR/TM-10-40, Tables 1, 4, 12,
-13): bank integral worth 9927 pcm (12.63 beta); HEU core 1 initial critical bank height
-7.36 in (18.69 cm); typical excess reactivity 6-7 beta; typical bank worth 10061 pcm of which
-7388 pcm lies between 5 in and fully out; blade #5 integral worth 1776 pcm; one blade 5 in to
-out 1258 pcm; shutdown margin 3.35-3.56 % dk/k with one blade out (HEU core 2), tech-spec
-minimum 1 %. No OpenMC blade worths for MITR were found; these MCNP/SAR values stand in.
+#### Core loading and shim blades: fitted to HEU core 2
+Reference: ANL/RERTR/TM-10-41 (HEU benchmark report, 2010; OSTI 1008287). Published and used:
+the MITR position designations (Fig. 2-7: per ring, clockwise seen from the top from the
+regulating-rod corner; the three A-ring rhombi are turned 60 degrees from the B/C tiling, so
+A1 points at the regulating rod); the blade numbering (blade 1 is the first clockwise from the
+regulating rod); fuel meat 22.375 in; blade tips 10.25 in below the median plane when
+inserted and 10.75 in above it when withdrawn (21 in travel). Estimate: the median plane is
+the fuel-meat centre, so inserted tips sit 2.38 cm above the fuel bottom, and bank heights
+are measured from there, like MITR's.
 
-`python3 verify_blades.py calibrate` fits two constants to the first two values on the 2 cm
-mesh (regulating rod at 15 cm): the blade's thermal absorption Sa2 (= 1.237 /cm; Sa1 kept at
-0.03 Sa2, an estimate) and a common scale on the fuel's nu-Sigma_f (x 0.9912). The fuel had to
-be part of the fit: the old fuel gave ~8800 pcm of excess reactivity, which the old blades
-(Sa2 = 10 /cm, worth 14,000-19,000 pcm) were compensating; blades worth 9927 pcm could not
-have shut that core down. Everything else in the list above is compared, not fitted.
+The earlier fit mixed three cores: the 7.36 in critical height was core 1 (1975), which had
+cadmium fixed absorbers in the upper core; the shutdown margins were MCNP values for core 2;
+the 9927 pcm bank worth was a SAR value for an unstated core. The model now represents core 2
+(first critical March 1976): 22 fresh elements, solid aluminum dummies in A2, A3, B3, B6, B9,
+no fixed absorbers. Its published values: critical bank height 8.3 in (Table 4-2; Table 4-1
+gives 8.6, a 2010 RERTR paper 8.5); measured single-blade worths 2161-2377 pcm (Table 4-6;
+some are inferred by symmetry); MCNP shutdown margin 3.35-3.56 % with one blade out (Table
+4-11, calculated, not measured); bank worth 12642 pcm (MCNP), 13362-15120 pcm (1975-76 startup
+report) or 9927 pcm (SAR). Not modeled: core 2 started with cadmium blades, replaced one at a
+time by ~1 % boron steel during the core; all six are modeled as boron steel.
+
+`python3 verify_blades.py calibrate` fits two constants on the 2 cm mesh (regulating rod at
+15 cm): the blade's thermal absorption Sa2 (= 1.739 /cm; Sa1 kept at 0.03 Sa2, an estimate) to
+the mean single-blade worth, and a common scale on the fuel's nu-Sigma_f (x 1.0443) to the
+critical height. Everything else is compared, not fitted.
 
 The fit also exposed a rasterization bug: blades were sampled on the material subsampling
 grid, which is coarser than the 0.6 cm blade, so on the 4 cm mesh the two blades parallel to
@@ -231,18 +243,18 @@ of `shim_bank.sides`); a single number still moves the whole bank.
 #### Regulating rod and automatic power control
 Published (MITR) and used as such: one regulating rod, cadmium on aluminum, with no scram
 capability, used to hold power by hand or by an automatic controller (tech specs
-ML102320068, 1.3.31); it stands at a corner of the core hexagon between two shim blades;
-integral worth 124 pcm (158 mbeta, HEU SAR value quoted in the ANL HEU-to-LEU conversion
-analysis); its worth grows as the shim bank is withdrawn (shadowing; ANL benchmark of the
-LEU core: roughly doubles over the bank's range); tech-spec limits for a device on an
+ML102320068, 1.3.31); it stands at the core corner between shim blades 1 and 6 (TM-10-41
+Fig. 2-7); measured integral worth 228 pcm in core 2 with the bank at 8.5 in, and 134 / 269
+pcm in core 1 at 7.5 / 16.8 in (TM-10-41 Tables 4-9, 4-10; the HEU SAR quotes 124 pcm); its
+worth grows as the shim bank is withdrawn (shadowing); tech-spec limits for a device on an
 automatic controller: < 0.5 % dk/k available positive reactivity, insertion < 5e-4 dk/k/s,
 and the controller must be separate from the safety system.
-Estimates: which corner, the rod's radius (0.9 cm) and radial position, travel (53 cm),
-drive speed (0.5 cm/s), the nominal position (15 cm, just below the 18.7 cm bank tip; above
-the tip the blades shadow it so strongly that it is worth almost nothing) and the absorber
-constants (`reg_rod` Sa2 = 17.3 /cm is fitted so the integral worth is 124 pcm on the 2 cm mesh
-at the critical bank height: `python3 verify_control.py calibrate`; cadmium's real thermal
-absorption is ~100 /cm, so a near-black "equivalent" value is plausible).
+Estimates: the rod's radius (0.9 cm) and radial position, travel (53 cm, from the fuel
+bottom), drive speed (0.5 cm/s), the nominal position (15 cm, below the core 2 bank tip at
+23.5 cm above the fuel bottom; above the tip the blades shadow it so strongly that it is
+worth almost nothing) and the absorber constants (`reg_rod` Sa2 = 17.3 /cm, nearly black like
+cadmium, whose real thermal absorption is ~100 /cm). The worth is compared, not fitted: even a
+black rod of this radius reaches only ~208 pcm at the core 2 critical bank.
 
 The controller (`controller.py`, constants in `power_controller`) is not MITR's: no
 description of MITR's controller was found. It is a sampled-data period-demand law: every
@@ -265,7 +277,7 @@ setpoint step and ~4 min to settle within 0.1 %. Scenario commands:
 | Kinetics vs exact separable solution | direct: 1st order; PCQS with 0.5 s steps: 3e-5 |
 | PCQS vs extrapolated reference (MITR core, scram) | 0.25 s steps: 1e-6 before, 1e-3 during (reference uncertainty 7e-4), 1e-5 after the blade drop |
 | Inhour equation vs simulated period | 18.2 s vs 18.2 s |
-| Feedback sensitivities vs exact reactivity | 6e-5 |
+| Feedback sensitivities vs exact reactivity | error 6e-6 of the gross reactivity at 1 K, 6e-7 at 0.1 K (2nd order) |
 | Thermal energy conservation | 2e-14 |
 | Coupled transient vs extrapolated reference | PCQS (1 s steps): 3e-4 in power, 0.014 K in temperature |
 | Transient end state vs static feedback equilibrium | 3.2723 vs 3.2739 MW (decay heat off: it needs days to settle) |
@@ -274,9 +286,9 @@ setpoint step and ~4 min to settle within 0.1 %. Scenario commands:
 | Source kinetics, -$8.1 to +$0.6 (power x3949) vs exact | PCQS 1 s steps: 6e-5; direct: 1st order |
 | MITR source state vs independent fixed-source iteration | 3e-9 |
 | Count-rate meter noise vs counting theory | 0.908 vs 0.905 cps |
-| Period meters vs true stable period | 417.2 s vs 417.2 s |
-| Trips | period (continuous withdrawal); 6.51 MW; low primary flow 0.78 s after both pumps trip at 100 kW; 80.4 kW in natural circulation |
-| 1/M approach ECP vs static critical height (4 cm mesh) | 16.26 vs 16.12 cm (0.55 of a 0.1 inch step) |
+| Period meters vs true stable period | 300.0 s vs 300.0 s |
+| Trips | period (continuous withdrawal); 6.52 MW; low primary flow 0.78 s after both pumps trip at 100 kW; 80.3 kW in natural circulation (280 pcm step) |
+| 1/M approach ECP vs static critical height (4 cm mesh) | 18.46 vs 18.50 cm (0.15 of a 0.1 inch step) |
 | Decay-heat groups vs ANS-5.1 closed form (30 days at power, then 1 s ... 1 day) | 2e-16 |
 | ANS-5.1 decay heat vs published MITR analyses | 4.40 % vs 4.39 % 16 s after shutdown (2003 analysis); 2.40 % vs 2.53 % 300 s after 4200 MWd (LEU PSAR, ORIGEN-S) |
 | Pump coastdown in the solver vs exact solutions | pump speed 1e-15; core flow vs exact Riccati solution 8e-8 |
@@ -289,17 +301,18 @@ setpoint step and ~4 min to settle within 0.1 %. Scenario commands:
 | Anderson-accelerated vs plain power iteration (MITR 4 cm, tight tolerance) | k equal to 8e-13, thermal flux to 1e-9; 37 vs 118 outer iterations |
 | Blade areas on the mesh vs thickness x width | 2e-16 (2 cm), 8e-4 (4 cm); before the fix two blades were missing on the 4 cm mesh |
 | Six blades moved individually vs the bank | identical cross sections (0 difference) |
-| Shim bank fit (targets): worth, critical height vs published HEU | 9924 vs 9927 pcm (3e-4); 18.70 vs 18.69 cm |
-| Not fitted: excess reactivity vs published | 6723 pcm = 8.55 beta vs 6-7 beta |
-| Not fitted: share of bank worth from 5 in to out | 0.84 vs 0.73 |
-| Not fitted: single-blade worth vs blade #5 | 1151-2224 pcm (mean 1740) vs 1776 pcm; 5 in -> out mean 1417 vs 1258 pcm |
-| Not fitted: shutdown margin, one blade out | 0.76-1.99 % vs 3.35-3.56 % (tech-spec minimum 1 %) |
-| Regulating rod integral worth vs published HEU value (calibration target) | 124.00 vs 124 pcm (2 cm mesh, bank at its critical 18.70 cm); 91 pcm on the 4 cm live mesh |
-| Regulating rod vs tech-spec limits for automatic control | 55.5 pcm available positive reactivity (limit 500); at most 3.4 pcm/s (limit 50) |
-| Shadowing: rod worth vs bank height vs published trend | 124 -> 290 pcm from the critical bank to fully out (x2.3); published (LEU analysis): 146 -> 301 pcm (x2.1) |
-| Rod withdrawal 8 -> 18 cm: transient vs static reactivity (1 - k0/k1); period vs inhour | 2.0e-6; 170.33 vs 170.33 s (2.4e-6) |
-| AUTO at zero power: setpoint +10 %, then a +9 pcm bank disturbance | power on the setpoint to 1e-8; final rod vs static search for k = k0: 4e-7 cm (8e-6 pcm); 7 % overshoot |
-| AUTO at 2 MW with feedback: setpoint +10 % | power on the setpoint to 5e-8; final rod vs static feedback-equilibrium search: 4e-5 cm (4e-4 pcm) |
+| MITR position labels vs facility core map (Fig. 2-7); element areas | every element nearest its own label; areas exact to 3e-5 |
+| Blade fit (targets): mean single-blade worth, critical height vs HEU core 2 | 2253.3 vs 2253.3 pcm (1e-6); 21.082 vs 21.082 cm (8.3 in) |
+| Not fitted: single-blade worths vs measured (MITR blades 1-6) | 2550, 2456, 1822, 2325, 2539, 1829 vs 2222, 2161, 2161, 2377, 2377, 2222 pcm (RMS 13 %, largest 18 %; MCNP was 2-17 % low) |
+| Not fitted: bank integral worth | 13629 pcm vs 12642 (MCNP), 13362-15120 (startup report), 9927 (SAR) |
+| Not fitted: shutdown margin, one blade out | 3.06-4.31 % vs MCNP 3.35-3.56 % (tech-spec minimum 1 %) |
+| Not fitted: excess reactivity, bank out | 7144 pcm = 9.09 beta (fresh core 2; no published value; modern burned cores 6-7 beta) |
+| Regulating rod integral worth vs measured core 2 value (not fitted) | 196.8 vs 228 pcm (-14 %; 2 cm mesh, bank at its critical 21.08 cm); 144 pcm on the 4 cm live mesh |
+| Regulating rod vs tech-spec limits for automatic control | 104.7 pcm available positive reactivity (limit 500); at most 5.0 pcm/s (limit 50) |
+| Shadowing: rod worth vs bank height vs published trend | 197 -> 327 pcm from the critical bank to fully out (x1.7); published (LEU analysis): 146 -> 301 pcm (x2.1); core 1 measured 134 -> 269 pcm from 7.5 to 16.8 in |
+| Rod withdrawal 8 -> 18 cm: transient vs static reactivity (1 - k0/k1); period vs inhour | 3.0e-6; 113.86 vs 113.86 s (3.7e-6) |
+| AUTO at zero power: setpoint +10 %, then a +12.7 pcm bank disturbance | power on the setpoint to 8e-9; final rod vs static search for k = k0: 2e-7 cm (6e-6 pcm); 5 % overshoot |
+| AUTO at 2 MW with feedback: setpoint +10 % | power on the setpoint to 5e-8; final rod vs static feedback-equilibrium search: 3e-5 cm (4e-4 pcm) |
 | AUTO closed loop (1 MW, feedback, setpoint +5 %) vs extrapolated direct reference | PCQS 1 s steps: power 2.2e-5, rod 5e-4 cm, plate 7e-4 K; 0.5 s: 6.3e-6 |
 | Live AUTO vs offline run of the same commands | 2e-10; a manual rod command or a scram switches AUTO off at once, rod stays put |
 
@@ -312,15 +325,15 @@ scram and reset path runs against the real engine, with the matplotlib plots ren
 - Diffusion theory is crude for the thin, near-black shim blades; blade constants are
   "equivalent" values fitted to two published numbers, and rod cusping is only partly
   corrected (critical height +-1 cm).
-- The bank's worth is right in total but sits too high: 84 % of it lies above 5 in
-  (published 73 %), so the excess reactivity is 8.55 beta (published 6-7) and the shutdown
-  margin with one blade out is 0.8-2.0 % (published 3.4-3.6 %; below the 1 % tech-spec
-  minimum for two blades). Refits with 10x more fast absorption or without the cusping
-  correction changed the excess by < 1 %, so this is the axial flux shape (axial reflectors,
-  fuel), not the blades.
-- Single-blade worths vary 1151-2224 pcm around the core (published shutdown margins vary
-  only 3.35-3.56 %): the estimated dummy-element layout (A-2, A-3, B-5) tilts the flux.
-- The 4 cm live mesh differs from the 2 cm mesh: critical bank 16.1 vs 18.7 cm.
+- Single-blade worths scatter +-15 % around the measured core 2 values (blades 3 and 6 low,
+  1, 2 and 5 high), wider than the measurements; the shutdown margin follows (3.1-4.3 % vs
+  MCNP 3.35-3.56 %). Element homogenization and the estimated blade gap and thickness are
+  the likely causes.
+- The radial geometry (core tank, D2O reflector, graphite) and element width are estimates;
+  no source with those dimensions has been found yet (the MITR SAR is the likely one).
+- The regulating rod is 14 % below its measured core 2 worth, and its worth rises only x1.7
+  from the critical bank to fully out (published x2.1).
+- The 4 cm live mesh differs from the 2 cm mesh: critical bank 18.5 vs 21.1 cm.
 - Elements are homogenized, so plate-edge hot spots are not resolved.
 - No boiling or D2O photoneutrons. Inlet temperature changes are instantaneous steps, and
   the inlet temperature stays fixed after a loss of flow (pool heat-up not modeled).

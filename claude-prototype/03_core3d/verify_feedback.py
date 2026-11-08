@@ -88,10 +88,13 @@ def test_sensitivity(cfg, model, kin):
                    s.k0, kin)
         exact, _ = s._pk_params(ops, s.psi1, s.psi2)
         exact -= s.rho
-        rel = abs(pred / exact - 1)
+        # random signs nearly cancel, so the error is measured against the gross reactivity
+        # sum |a dT|; a first-order sensitivity leaves a second-order residual: ~ amp
+        gross = np.abs(a_f) @ np.abs(dTf) + np.abs(a_c) @ np.abs(dTc)
+        rel = abs(pred - exact) / gross
         print(f"    random dT ~ {amp:4.1f} K: predicted {pred * 1e5:+.4f} pcm, exact {exact * 1e5:+.4f} pcm, "
-              f"rel. diff {rel:.1e}")
-        assert rel < 2e-3 * amp + 1e-6, "sensitivity mismatch"
+              f"error {abs(pred - exact) * 1e5:.1e} pcm = {rel:.1e} of the gross {gross * 1e5:.2f} pcm")
+        assert rel < 2e-3 * amp + 1e-7, "sensitivity mismatch"
 
 
 # ----------------------------------------------------------------------------- [2]
