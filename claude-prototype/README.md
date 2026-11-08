@@ -55,12 +55,13 @@ Run everything from inside `03_core3d/`.
 | `kinetics3d.py` | Time-dependent 3D kinetics: direct implicit, predictor-corrector quasi-static (PCQS), adiabatic; shim bank and regulating rod programs; controller sampled on exact step boundaries |
 | `thermal.py` | Per-channel thermal-hydraulics (24 channels x axial nodes), temperature feedback, decay heat (23 ANS-5.1 groups per node), primary loop (pump coastdown, natural circulation through the natural convection valves) |
 | `run_transient.py` | Runs the scenario in the YAML and plots power, reactivity, temperatures and power maps |
-| `verify_solver.py` | Static solver checks: analytic bare cube, 2nd-order convergence, symmetry, albedo BCs |
+| `verify_solver.py` | Static solver checks: analytic bare cube, 2nd-order convergence, symmetry, albedo BCs, fixed source, multigrid preconditioner, Anderson acceleration |
 | `verify_kinetics.py` | Kinetics checks: exact separable solution, extrapolated reference on the MITR core |
 | `verify_feedback.py` | Feedback checks: sensitivities, energy conservation, equilibrium vs static search; loss of flow: decay heat vs the ANS closed form, coastdown vs exact solutions, natural circulation vs an algebraic steady state, loss-of-flow accident vs extrapolated reference |
 | `verify_live.py` | Live-mode checks: pacing, commands, scram lockout, backlog cap, reset, match with offline runs |
 | `gui_smoke_test.py` | Runs all of `core_viewer.py`'s logic with stand-in Qt/PyVista classes (for machines without a display or without those packages) |
 | `verify_all.py` | The whole verification suite, independent scripts and reference runs as parallel processes (one per performance core); logs in `results/logs/` |
+| `multigrid.py` | Smoothed-aggregation algebraic multigrid preconditioner (2x2x2 aggregates on the structured mesh, Galerkin coarse grids, Jacobi-smoothed V-cycle) for CG on fine meshes |
 | `parallel.py` | Process pool for independent runs: counts Apple Silicon performance cores, one BLAS thread per process |
 | `verify_startup.py` | Startup checks: exact source-driven kinetics, source steady state, instruments and trips, scripted approach to criticality |
 | `verify_blades.py` | Shim blade checks: exact blade areas on every mesh, individual blade positions, fit to the published HEU bank worth and critical height, and comparison with published values that were not fitted (excess reactivity, single-blade worths, shutdown margin); `calibrate` refits blades and fuel |
@@ -81,7 +82,7 @@ python3 verify_feedback.py                        # ~5 min
 python3 verify_feedback.py lof                    # ~5 min (decay heat, coastdown, natural circulation)
 python3 verify_live.py                            # ~5 min
 python3 verify_startup.py                         # ~25 min (the approach to criticality is ~15)
-python3 verify_blades.py                          # ~4 min (shim blades vs published worths)
+python3 verify_blades.py                          # ~1 min (shim blades vs published worths)
 python3 verify_control.py                         # ~20 min (regulating rod and controller)
 ```
 Full reference comparisons take longer. `python3 verify_kinetics.py run` (no names = all
@@ -107,12 +108,35 @@ python3 verify_all.py --jobs 4    # limit processes (default: performance cores;
   for these 3D meshes its fill makes it slower (4 cm) or runs out of memory (2 cm).
 - Measured on the 2-core test machine, same results to 1e-11 in k: 2 cm eigenvalue solve
   24 -> 7 s (warm-started 19 -> 7 s); 4 cm solve 6.3 -> 0.6 s; transient start-up
-  (steady state + adjoint) 25 -> 1.2 s; `verify_blades.py` 11 -> 3 min; whole suite with
-  reference runs ~4 h sequential -> 85 min with `verify_all.py` on 2 cores. With more
+  (steady state + adjoint) 25 -> 1.2 s; `verify_blades.py` 11 -> 1.1 min; whole suite with
+  reference runs ~4 h sequential -> 76 min with `verify_all.py` on 2 cores. With more
   performance cores the suite is bounded by its longest tasks (startup ~25 min, the finest
   loss-of-flow reference ~15 min).
-- Not yet done: the PCQS amplitude/thermal ODE (scipy Radau with Python callbacks) is ~40 % of
-  a 4 cm transient; the time-step matrices are rebuilt every step.
+- The PCQS amplitude/thermal ODE (Radau) runs at the solver's tolerance (`tol`, 1e-7 by
+  default; it was a fixed 1e-9, which took 2.7x the steps without changing any verified
+  result), and its right-hand side fills one array instead of concatenating pieces, with one
+  water-density evaluation per call. The ODE share of a 4 cm transient with feedback fell
+  from 22 s to 10.5 s (whole run 65 -> 53 s); PCQS reference runs are 1.5-1.8x faster,
+  `verify_startup.py` 26 -> 19 min, and live mode keeps up at up to ~6x real time on the test
+  machine (was ~3x). Every verified error is unchanged.
+- Tried and dropped: integrating knot to knot of the reactivity table and carrying the ODE step
+  size between macro steps (no gain); natural-order LU inside Radau (faster on isolated
+  matrices, slower in the runs).
+- Multigrid (`multigrid.py`, no extra dependency): CG preconditioned by one smoothed-aggregation
+  V-cycle needs 12-17 iterations on every mesh instead of Jacobi's 80-230 (doubling per mesh
+  halving). A V-cycle costs ~6-7 fine-grid matrix products, so the net gain depends on mesh
+  size: on the 2 cm mesh the eigenvalue solve is 7.8 -> 5.4 s and a transient 1.46x faster
+  (10 s with a scram: 491 -> 337 s, power equal to 6e-10); on the 4 cm mesh it breaks even, so
+  it is used only from 50,000 cells (`diffusion3d.MG_LIMIT`). The 4 cm live mesh is unaffected.
+  pyamg (native Apple Silicon wheels) offers the same method with more tuning options.
+- Anderson acceleration (depth 5) of the outer (fission-source) iteration in the eigenvalue,
+  adjoint and fixed-source solvers: ~4x fewer outer iterations (MITR 2 cm: 101 -> 23). With
+  multigrid, the 2 cm eigenvalue solve went 24 s (start of this work) -> 1.8 s, the 2 cm adjoint
+  5.9 -> 2.0 s, the 4 cm eigenvalue solve 0.52 -> 0.19 s. Safeguards restart the history if the
+  residual grows or the source turns negative. `solve_k(..., accelerate=False)` gives the
+  plain power iteration. PCQS time steps are unaffected (their shape solve is already GMRES).
+- Not yet done: the time-step matrices are rebuilt every step; the shape solves (CG inside
+  GMRES) are now most of a transient.
 
 #### Live mode (`core_viewer.py --live`)
 The core runs in real time (or faster) while you operate it:
@@ -135,8 +159,8 @@ The core runs in real time (or faster) while you operate it:
   trend plots of power, blade position and temperatures; 3D colors by element power or
   hottest plate temperature, or flux / power-density slices.
 - Automatic high-power trip at 120 % of rated power (7.2 MW); press Reset afterwards.
-- Options: `--mesh 4` (default; with feedback it reached ~3-5x real time on the test machine,
-  ~2.5x with AUTO on, which samples every second),
+- Options: `--mesh 4` (default; with feedback it keeps up to ~6x real time on the test
+  machine; AUTO samples every second, which costs a little),
   `--mesh 2` (finer, well below real time), `--power 100` (start at 100 W, i.e. a startup
   from low power), `--no-feedback`.
 
@@ -261,6 +285,8 @@ setpoint step and ~4 min to settle within 0.1 %. Scenario commands:
 | Loss of flow at 6 MW (pump trip, scram) vs extrapolated reference | PCQS 0.2 s: power 1.4e-4 before the scram, 1.3e-4 after the blade drop; flow 6e-7; hottest plate 0.02 K; NCVs open at 21.8 s in every run |
 | Energy conservation with decay heat and changing flow | 1e-15 (PCQS), 1e-13 (direct) |
 | Live pacing at 5x requested | 4.7x achieved; 0.97x after dropping back from an unreachable speed (no catch-up burst) |
+| Multigrid preconditioner: symmetry, CG vs direct solve, mesh independence, MITR 2 cm k | 1e-17; 3e-14; CG iterations 14 -> 15 from 32^3 to 64^3 (Jacobi 40 -> 82); k equal to 6e-11 |
+| Anderson-accelerated vs plain power iteration (MITR 4 cm, tight tolerance) | k equal to 8e-13, thermal flux to 1e-9; 37 vs 118 outer iterations |
 | Blade areas on the mesh vs thickness x width | 2e-16 (2 cm), 8e-4 (4 cm); before the fix two blades were missing on the 4 cm mesh |
 | Six blades moved individually vs the bank | identical cross sections (0 difference) |
 | Shim bank fit (targets): worth, critical height vs published HEU | 9924 vs 9927 pcm (3e-4); 18.70 vs 18.69 cm |

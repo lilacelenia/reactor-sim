@@ -2,10 +2,10 @@
     reference P  : 2nd-order Richardson (25/50/100 ms), uncertainty 1.7e-07
     reference reg: 2nd-order Richardson (25/50/100 ms), uncertainty 3.9e-06 cm
     reference Tf : 2nd-order Richardson (25/50/100 ms), uncertainty 2.6e-06 K
-    direct  dt=0.1    power 1.1e-04, rod 2.5e-03 cm, hottest plate 1.3e-03 K  (169 s)
-    direct  dt=0.025  power 2.8e-05, rod 6.3e-04 cm, hottest plate 3.2e-04 K  (537 s)
-    pcqs    dt=1.0    power 2.2e-05, rod 5.1e-04 cm, hottest plate 6.7e-04 K  (40 s)
-    pcqs    dt=0.5    power 6.3e-06, rod 1.4e-04 cm, hottest plate 2.3e-04 K  (70 s)
+    direct  dt=0.1    power 1.1e-04, rod 2.5e-03 cm, hottest plate 1.3e-03 K  (172 s)
+    direct  dt=0.025  power 2.8e-05, rod 6.3e-04 cm, hottest plate 3.2e-04 K  (552 s)
+    pcqs    dt=1.0    power 2.2e-05, rod 5.1e-04 cm, hottest plate 6.7e-04 K  (27 s)
+    pcqs    dt=0.5    power 6.3e-06, rod 1.4e-04 cm, hottest plate 2.3e-04 K  (54 s)
     reference: power 1.03488 x 1 MW at 40 s, rod 15.000 -> 15.496 cm
     saved results/verify_control.png
 

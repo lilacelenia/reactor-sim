@@ -189,12 +189,18 @@ class PrimaryLoop:
         gradients with respect to every coolant node."""
         ne, nl = self.th.ne, self.th.nl
         T = Tc.reshape(ne, nl)
-        Tm = 0.5 * (np.concatenate((np.full((ne, 1), T_in), T[:, :-1]), axis=1) + T)
-        rin = water_density(T_in)
+        Tm = np.empty((ne, nl))                    # node-average temperatures
+        Tm[:, 0] = T_in
+        Tm[:, 1:] = T[:, :-1]
+        Tm += T
+        Tm *= 0.5
         T_mix = T[:, -1].mean()
-        B = (GRAVITY * np.sum((rin - water_density(Tm)) * self.dz) / ne
-             + GRAVITY * self.H_ch * np.mean(rin - water_density(T[:, -1])))
-        Bp = GRAVITY * self.H_hx * (rin - water_density(T_mix))
+        # one density evaluation for everything (called many times per step by the ODE solver)
+        rho = water_density(np.concatenate((Tm.ravel(), T[:, -1], [T_in, T_mix])))
+        rin, r_mix = rho[-2], rho[-1]
+        B = (GRAVITY * ((rin * self.dz.sum()) - (rho[:ne * nl].reshape(ne, nl) @ self.dz).sum() / ne)
+             + GRAVITY * self.H_ch * (rin - rho[ne * nl:-2].mean()))
+        Bp = GRAVITY * self.H_hx * (rin - r_mix)
         if not grad:
             return B, Bp
         dr = water_density_dT(Tm) * self.dz

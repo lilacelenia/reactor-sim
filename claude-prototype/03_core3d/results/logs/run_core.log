@@ -1,15 +1,15 @@
 MITR-II-like core (illustrative)
 Shim bank sweep:
-  blades at   0.0 cm: k = 0.96898   (31 its, 2.9 s)
-  blades at   8.8 cm: k = 0.97694   (44 its, 3.9 s)
-  blades at  17.7 cm: k = 0.99634   (46 its, 3.9 s)
-  blades at  26.5 cm: k = 1.02275   (37 its, 3.3 s)
-  blades at  35.3 cm: k = 1.04528   (34 its, 2.9 s)
-  blades at  44.2 cm: k = 1.06172   (37 its, 3.3 s)
-  blades at  53.0 cm: k = 1.07208   (39 its, 3.8 s)
+  blades at   0.0 cm: k = 0.96898   (12 its, 1.7 s)
+  blades at   8.8 cm: k = 0.97694   (11 its, 1.4 s)
+  blades at  17.7 cm: k = 0.99634   (12 its, 1.6 s)
+  blades at  26.5 cm: k = 1.02275   (13 its, 1.7 s)
+  blades at  35.3 cm: k = 1.04528   (11 its, 1.6 s)
+  blades at  44.2 cm: k = 1.06172   (11 its, 1.3 s)
+  blades at  53.0 cm: k = 1.07208   (11 its, 1.3 s)
 Searching for critical bank height:
-  trial  18.89 cm -> k = 1.000543
-  trial  18.73 cm -> k = 1.000103
+  trial  18.89 cm -> k = 1.000542
+  trial  18.73 cm -> k = 1.000102
   trial  18.70 cm -> k = 1.000015
 
 Critical shim bank height: 18.70 cm  (k = 1.000015)

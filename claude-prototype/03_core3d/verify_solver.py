@@ -3,11 +3,20 @@ verify_solver.py -- checks diffusion3d against problems with known answers.
 
 1. Bare homogeneous cube, phi = 0 on all faces: analytic k from the buckling
    B^2 = 3 (pi/a)^2. Error should fall ~4x per mesh halving (2nd-order accuracy).
-2. Symmetry: one octant with reflective planes must reproduce the full-cube k.
+2. Symmetry: one octant with reflective planes must reproduce the full-cube k (both
+   converged tightly: with the plain power iteration the octant iterates were an exact
+   restriction of the full ones, so k matched at any tolerance; Anderson mixing is not).
 3. Albedo boundaries: a slab with reflective x/y faces is a 1D problem; with
    Marshak (gamma=0.5) z faces it must match a direct 1D eigen solve, which checks the
    boundary coefficient and heterogeneous interface coupling.
 4. Fixed source: subcritical multiplication M = 1/(1-k) for a fundamental-mode source.
+5. Multigrid preconditioner (multigrid.py): symmetric and positive definite (as CG needs);
+   CG with it reproduces a sparse direct solve; its iteration count stays flat as the mesh
+   is refined (Jacobi's grows ~2x per halving); the MITR 2 cm eigenvalue is the same with
+   and without it.
+6. Anderson acceleration of the outer iteration: the accelerated and plain power iterations
+   converge to the same k and flux on the MITR core (4 cm, tight tolerance), in far fewer
+   outer iterations. (Tests 1-4 above also run accelerated, against analytic answers.)
 """
 import numpy as np
 import scipy.sparse.linalg as spla
@@ -35,7 +44,8 @@ def test_bare_cube():
     errs = []
     for n in (8, 16, 32, 64):
         mesh = Mesh(n, n, n, a / n, a / n, a / n)
-        r = solve_k(Problem(mesh, uniform(mesh, FUEL), {f: ("zero",) for f in FACES}), tol_k=1e-9)
+        r = solve_k(Problem(mesh, uniform(mesh, FUEL), {f: ("zero",) for f in FACES}), tol_k=1e-9,
+                    tol_src=1e-8)
         errs.append(abs(r.k - k_exact))
         print(f"    {n:3d}^3 cells: k = {r.k:.7f}  error = {errs[-1]:.2e}  outer its = {r.outer_iterations}")
     orders = np.log2(np.array(errs[:-1]) / np.array(errs[1:]))
@@ -47,12 +57,13 @@ def test_bare_cube():
 def test_symmetry():
     a, n = 200.0, 32
     full = Mesh(n, n, n, a / n, a / n, a / n)
-    r_full = solve_k(Problem(full, uniform(full, FUEL), {f: ("zero",) for f in FACES}), tol_k=1e-10)
+    r_full = solve_k(Problem(full, uniform(full, FUEL), {f: ("zero",) for f in FACES}), tol_k=1e-10,
+                     tol_src=1e-9)
     h = n // 2
     octant = Mesh(h, h, h, a / n, a / n, a / n)
     bc = {f: ("zero",) for f in FACES}
     bc.update({"x-": ("reflective",), "y-": ("reflective",), "z-": ("reflective",)})
-    r_oct = solve_k(Problem(octant, uniform(octant, FUEL), bc), tol_k=1e-10)
+    r_oct = solve_k(Problem(octant, uniform(octant, FUEL), bc), tol_k=1e-10, tol_src=1e-9)
     d = abs(r_full.k - r_oct.k)
     print(f"[2] Octant symmetry: full k = {r_full.k:.8f}, octant k = {r_oct.k:.8f}, diff = {d:.1e}")
     assert d < 1e-7
@@ -105,9 +116,83 @@ def test_fixed_source():
     assert abs(M_sim - M_theory) / abs(M_theory) < 1e-4
 
 
+def test_multigrid():
+    import time
+    import diffusion3d as D
+    from core_builder import build, load_config
+    from multigrid import SAPreconditioner
+    print("5. Multigrid preconditioner")
+    rng = np.random.default_rng(1)
+    cfg = load_config("mitr2_like.yaml")
+    cfg["mesh"]["cell_size"] = 4.0
+    p = build(cfg).problem_at(18.7)
+    for g, (dk, sig) in enumerate((("D1", p.xs["Sa1"] + p.xs["Ss12"]), ("D2", p.xs["Sa2"]))):
+        A = build_loss_matrix(p.mesh, p.xs[dk], sig, p.bc).tocsr()
+        M = SAPreconditioner(A, p.mesh.shape)
+        x, y = rng.random(A.shape[0]) - 0.5, rng.random(A.shape[0]) - 0.5
+        asym = abs(x @ M(y) - y @ M(x)) / (np.linalg.norm(x) * np.linalg.norm(M(y)))
+        pos = min((v @ M(v)) for v in rng.random((5, A.shape[0])) - 0.5)
+        b = rng.random(A.shape[0])
+        xd = spla.spsolve(A.tocsc(), b)
+        xm = D.pcg(A, b, None, 1e-12, M)
+        err = np.linalg.norm(xm - xd) / np.linalg.norm(xd)
+        print(f"   MITR 4 cm group {g + 1}: {M.n_levels} levels; |x.My - y.Mx| {asym:.1e}; "
+              f"min v.Mv {pos:.2e} > 0; CG(MG) vs direct {err:.1e}")
+        assert asym < 1e-12 and pos > 0 and err < 1e-9
+    its = {}
+    for n in (16, 32, 64):
+        mesh = Mesh(n, n, n, 200.0 / n, 200.0 / n, 200.0 / n)
+        xs = uniform(mesh, FUEL)
+        A = build_loss_matrix(mesh, xs["D1"], xs["Sa1"] + xs["Ss12"], {f: ("zero",) for f in FACES}).tocsr()
+        b = np.ones(A.shape[0])
+        row = []
+        for M in (1.0 / A.diagonal(), SAPreconditioner(A, mesh.shape)):
+            cnt = [0]
+            Mf = M if callable(M) else (lambda r, d=M: d * r)
+
+            def counted(r, Mf=Mf):
+                cnt[0] += 1
+                return Mf(r)
+            D.pcg(A, b, None, 1e-10, counted)
+            row.append(cnt[0])
+        its[n] = row
+        print(f"   bare cube {n}^3: CG iterations Jacobi {row[0]:4d}, multigrid {row[1]:3d}")
+    # 16^3 reaches the coarse grid a level sooner; from 32^3 to 64^3 multigrid stays flat
+    assert its[64][1] <= 1.3 * its[32][1] and its[64][0] >= 1.8 * its[32][0]
+    cfg = load_config("mitr2_like.yaml")
+    m2 = build(cfg)
+    res = []
+    for lim in (D.MG_LIMIT, 10**12):
+        old, D.MG_LIMIT = D.MG_LIMIT, lim
+        t = time.time()
+        res.append((solve_k(m2.problem_at(18.7), tol_k=1e-10, tol_src=1e-9).k, time.time() - t))
+        D.MG_LIMIT = old
+    d = abs(res[0][0] - res[1][0])
+    print(f"   MITR 2 cm eigenvalue: multigrid {res[0][0]:.12f} ({res[0][1]:.1f} s), Jacobi "
+          f"{res[1][0]:.12f} ({res[1][1]:.1f} s): difference {d:.1e}")
+    assert d < 1e-9
+
+
+def test_anderson():
+    from core_builder import build, load_config
+    print("6. Anderson-accelerated outer iteration vs plain power iteration (MITR, 4 cm)")
+    cfg = load_config("mitr2_like.yaml")
+    cfg["mesh"]["cell_size"] = 4.0
+    p = build(cfg).problem_at(18.7)
+    a = solve_k(p, tol_k=1e-12, tol_src=1e-11, accelerate=True)
+    b = solve_k(p, tol_k=1e-12, tol_src=1e-11, accelerate=False)
+    df = np.abs(a.phi2 / a.phi2.max() - b.phi2 / b.phi2.max()).max()
+    print(f"   k {a.k:.12f} ({a.outer_iterations} outers) vs {b.k:.12f} ({b.outer_iterations} "
+          f"outers): difference {abs(a.k - b.k):.1e}; max thermal-flux difference {df:.1e}")
+    assert a.converged and b.converged and abs(a.k - b.k) < 1e-10 and df < 1e-8
+    assert a.outer_iterations < b.outer_iterations / 2
+
+
 if __name__ == "__main__":
     test_bare_cube()
     test_symmetry()
     test_reflected_slab_vs_1d()
     test_fixed_source()
+    test_multigrid()
+    test_anderson()
     print("\nAll verification tests passed.")

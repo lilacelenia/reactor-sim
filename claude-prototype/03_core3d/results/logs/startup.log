@@ -1,13 +1,13 @@
 [1] Cube with source vs exact separable solution (physical units)
     k from 0.9500 (rho = $-8.10) to 1.0040 ($+0.61), ramp 2-12 s, run to 25 s
     source-driven steady state: total fission rate 8.76659470e+07 vs exact 8.76659470e+07 (rel. diff 3.6e-13)
-    direct dt_max=0.01    2501 steps: P(25 s)/P(0) = 3982.1 (exact 3949.2), max rel. error 8.3e-03  (22 s)
-    direct dt_max=0.005   5001 steps: P(25 s)/P(0) = 3965.6 (exact 3949.2), max rel. error 4.1e-03  (42 s)
+    direct dt_max=0.01    2501 steps: P(25 s)/P(0) = 3982.1 (exact 3949.2), max rel. error 8.3e-03  (23 s)
+    direct dt_max=0.005   5001 steps: P(25 s)/P(0) = 3965.6 (exact 3949.2), max rel. error 4.1e-03  (43 s)
     pcqs   dt_max=1.0       46 steps: P(25 s)/P(0) = 3949.2 (exact 3949.2), max rel. error 5.9e-05  (2 s)
-    pcqs   dt_max=0.25     102 steps: P(25 s)/P(0) = 3949.2 (exact 3949.2), max rel. error 5.4e-05  (3 s)
+    pcqs   dt_max=0.25     102 steps: P(25 s)/P(0) = 3949.2 (exact 3949.2), max rel. error 5.4e-05  (4 s)
     direct convergence order 1.01 (expect ~1)
 [2] Source-driven steady state (MITR-II-like, 4 cm mesh, blades fully in)
-    k_eff = 0.97644; total fission source 2.01016542e+06 vs independent source iteration 2.01016540e+06 (rel. diff 1.2e-08); power 1.696 mW
+    k_eff = 0.97644; total fission source 2.01016542e+06 vs independent source iteration 2.01016541e+06 (rel. diff 5.1e-09); power 1.696 mW
     multiplication: fission neutrons / source neutrons = 12.865 (point estimate k/(1-k) = 41.448)
     pcqs  : nothing moves for 30 s -> max |P/P0 - 1| = 3.5e-09
     direct: nothing moves for 30 s -> max |P/P0 - 1| = 2.3e-09
@@ -36,7 +36,7 @@
       blades  15.52 cm:     285.0 cps, 1/M = 0.0409 +- 0.0016, ECP = 16.604 cm
       blades  15.78 cm:     375.9 cps, 1/M = 0.0310 +- 0.0012, ECP = 16.593 cm
       blades  16.03 cm:     681.9 cps, 1/M = 0.0171 +- 0.0007, ECP = 16.386 cm
-      blades  16.26 cm: 11694864.4 cps, 1/M = 0.0000 +- 0.0000, ECP = 16.259 cm
+      blades  16.26 cm: 11694861.8 cps, 1/M = 0.0000 +- 0.0000, ECP = 16.259 cm
     final ECP 16.259 cm vs static critical height 16.119 cm (difference +0.140 cm; one MITR step = 0.254 cm); 14 counts, 100 min of reactor time
     stepped to 16.26 cm (ECP + 0.1 inch, or stayed if already supercritical): power 1.67e+05 W, period meter 70 s (true 69 s), no trip
     saved startup_approach.png

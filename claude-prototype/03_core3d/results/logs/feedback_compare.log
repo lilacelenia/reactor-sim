@@ -1,31 +1,31 @@
 [4] Coupled transient: 5 MW, withdraw 0.8 cm over 1-5 s (power triples)
     reference: 2nd-order Richardson of direct runs (dt = 10, 20, 40 ms), estimated uncertainty 1.9e-06
-    direct    dt_max=0.04    500 steps: max rel. power error 1.3e-03, hottest-plate temperature error 6.9e-02 K  (244 s)
-    direct    dt_max=0.01   2000 steps: max rel. power error 3.3e-04, hottest-plate temperature error 1.7e-02 K  (841 s)
-    pcqs      dt_max=1.0      20 steps: max rel. power error 3.2e-04, hottest-plate temperature error 1.4e-02 K  (22 s)
-    pcqs      dt_max=0.25     80 steps: max rel. power error 8.7e-05, hottest-plate temperature error 3.1e-03 K  (65 s)
-    adiabatic dt_max=0.25     80 steps: max rel. power error 6.9e-05, hottest-plate temperature error 5.9e-03 K  (27 s)
+    direct    dt_max=0.04    500 steps: max rel. power error 1.3e-03, hottest-plate temperature error 6.9e-02 K  (238 s)
+    direct    dt_max=0.01   2000 steps: max rel. power error 3.3e-04, hottest-plate temperature error 1.7e-02 K  (873 s)
+    pcqs      dt_max=1.0      20 steps: max rel. power error 3.2e-04, hottest-plate temperature error 1.4e-02 K  (15 s)
+    pcqs      dt_max=0.25     80 steps: max rel. power error 8.7e-05, hottest-plate temperature error 3.1e-03 K  (52 s)
+    adiabatic dt_max=0.25     80 steps: max rel. power error 6.9e-05, hottest-plate temperature error 6.0e-03 K  (16 s)
     final power: with feedback 8.85 MW, without 12.53 MW
 [9] Loss of flow at 6 MW: pumps trip at 1 s, scram at 2 s, to 30 s
     reference: 2nd-order Richardson of direct runs (dt = 10, 20, 40 ms), estimated power uncertainty 5.8e-04
     lof_direct_h    energy balance (in - out - stored change) / in = 3.8e-13
-    lof_direct_2h   energy balance (in - out - stored change) / in = -3.7e-14
-    lof_direct_4h   energy balance (in - out - stored change) / in = -7.8e-14
-    lof_pcqs_0.4    energy balance (in - out - stored change) / in = -9.2e-16
-    lof_pcqs_0.2    energy balance (in - out - stored change) / in = -3.9e-16
-    lof_direct_4h    750 steps ( 751 shared, 290 s):
+    lof_direct_2h   energy balance (in - out - stored change) / in = -4.2e-14
+    lof_direct_4h   energy balance (in - out - stored change) / in = -8.3e-14
+    lof_pcqs_0.4    energy balance (in - out - stored change) / in = -1.3e-16
+    lof_pcqs_0.2    energy balance (in - out - stored change) / in = 9.2e-16
+    lof_direct_4h    750 steps ( 751 shared, 287 s):
         before the scram  max rel. error power 1.1e-03, heat 1.0e-03, flow 1.1e-06; hottest plate 5.8e-02 K
         blade drop        max rel. error power 1.6e-02, heat 1.4e-02, flow 3.8e-06; hottest plate 1.3e+00 K
         after the drop    max rel. error power 4.8e-03, heat 3.5e-03, flow 1.2e-04; hottest plate 3.5e-01 K
-    lof_direct_h    3000 steps ( 751 shared, 1049 s):
+    lof_direct_h    3000 steps ( 751 shared, 1076 s):
         before the scram  max rel. error power 2.7e-04, heat 2.6e-04, flow 2.8e-07; hottest plate 1.5e-02 K
         blade drop        max rel. error power 3.4e-03, heat 2.8e-03, flow 1.4e-06; hottest plate 3.7e-01 K
         after the drop    max rel. error power 1.4e-03, heat 1.0e-03, flow 3.1e-05; hottest plate 8.7e-02 K
-    lof_pcqs_0.4     119 steps (  87 shared, 98 s):
+    lof_pcqs_0.4     119 steps (  87 shared, 76 s):
         before the scram  max rel. error power 2.3e-04, heat 2.1e-04, flow 1.3e-08; hottest plate 1.1e-02 K
         blade drop        max rel. error power 1.5e-02, heat 1.2e-02, flow 2.2e-07; hottest plate 5.6e-02 K
         after the drop    max rel. error power 1.8e-04, heat 1.3e-04, flow 1.7e-06; hottest plate 2.1e-02 K
-    lof_pcqs_0.2     192 steps ( 160 shared, 143 s):
+    lof_pcqs_0.2     192 steps ( 160 shared, 114 s):
         before the scram  max rel. error power 1.4e-04, heat 1.3e-04, flow 7.5e-09; hottest plate 7.0e-03 K
         blade drop        max rel. error power 1.5e-02, heat 1.2e-02, flow 2.2e-07; hottest plate 5.7e-02 K
         after the drop    max rel. error power 1.3e-04, heat 8.5e-05, flow 5.5e-07; hottest plate 1.7e-02 K

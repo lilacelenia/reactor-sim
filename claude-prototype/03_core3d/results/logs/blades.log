@@ -23,5 +23,5 @@
     single blade 5 in -> out 1417 pcm (mean) vs published 1258.0 pcm
     shutdown margin 0.76-1.99 % dk/k vs published 3.35-3.56 % (HEU core 2); tech-spec minimum 1.0 %
       NOTE: below the tech-spec minimum for some blades. Not a code error: the model's excess reactivity is too high (see above); the blade constants cannot change that (refits with Sa1/Sa2 = 0.3 or without the cusping correction moved it < 1 %)
-    4 cm live mesh: bank worth 10321 pcm, critical bank 16.119 cm, excess 7908 pcm  (192 s)
+    4 cm live mesh: bank worth 10321 pcm, critical bank 16.119 cm, excess 7908 pcm  (62 s)
 All blade checks passed.

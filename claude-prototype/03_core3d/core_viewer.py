@@ -526,6 +526,7 @@ class LiveViewer(CoreViewer):
     def _build_trends(self, layout):
         self.tfig = Figure(figsize=(12, 2.4), tight_layout=True)
         self.tax_p = self.tfig.add_subplot(1, 3, 1)
+        self.tax_p2 = self.tax_p.twinx()     # created once: twinx() per redraw piles up axes
         self.tax_t = self.tfig.add_subplot(1, 3, 2)
         self.tax_m = self.tfig.add_subplot(1, 3, 3)
         self.tcanvas = FigureCanvasQTAgg(self.tfig)
@@ -846,15 +847,17 @@ class LiveViewer(CoreViewer):
 
     def _plot_trends(self):
         tr = self.live.trends()
-        ap, at = self.tax_p, self.tax_t
+        ap, ap2, at = self.tax_p, self.tax_p2, self.tax_t
         ap.clear()
+        ap2.clear()
+        ap2.yaxis.tick_right()                 # clear() resets a twin's y axis to the left
+        ap2.yaxis.set_label_position("right")
         at.clear()
         if len(tr["t"]) >= 1:
             t = tr["t"]
             ap.semilogy(t, np.maximum(tr["power_w"], 1e-3), "C3")
             ap.set_xlabel("time [s]", fontsize=8)
             ap.set_ylabel("power [W]", fontsize=8)
-            ap2 = ap.twinx()
             ap2.plot(t, tr["blade"], "C0", lw=1)
             if self.live.has_reg:
                 ap2.plot(t, tr["reg_rod"], color=REG_COLOR, lw=1)

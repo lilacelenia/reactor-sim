@@ -37,7 +37,9 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.integrate import solve_ivp
 
-from diffusion3d import Problem, build_loss_matrix, inner_rtol, pcg, solve_k
+import diffusion3d
+from diffusion3d import Anderson, Problem, build_loss_matrix, inner_rtol, pcg, solve_k
+from multigrid import SAPreconditioner
 
 KEEPIN_BETA = np.array([0.000215, 0.001424, 0.001274, 0.002568, 0.000748, 0.000273])
 KEEPIN_LAMBDA = np.array([0.0124, 0.0305, 0.111, 0.301, 1.14, 3.01])
@@ -199,7 +201,7 @@ class PlantProgram:
 
 # ----------------------------------------------------------------------------- linear algebra
 def _cg(A, b, x0, rtol, dinv):
-    """Jacobi-preconditioned CG (diffusion3d.pcg); dinv = 1 / diag(A)."""
+    """Preconditioned CG (diffusion3d.pcg); dinv = 1 / diag(A) or a multigrid V-cycle."""
     if not np.any(b):
         return np.zeros_like(b)
     return pcg(A, b, x0, rtol, dinv)
@@ -223,8 +225,11 @@ class _Ops:
             self.M2 = (self.A2 + sp.identity(self.n) / (kin.v2 * dt)).tocsr()
         else:                                   # steady state: no time-absorption terms
             self.M1, self.M2 = self.A1.tocsr(), self.A2.tocsr()
-        self.P1 = 1.0 / self.M1.diagonal()          # Jacobi preconditioners (as arrays)
+        self.P1 = 1.0 / self.M1.diagonal()          # Jacobi preconditioners (as arrays) ...
         self.P2 = 1.0 / self.M2.diagonal()
+        if self.n >= diffusion3d.MG_LIMIT:          # ... or multigrid V-cycles on fine meshes
+            self.P1 = SAPreconditioner(self.M1, m.shape)
+            self.P2 = SAPreconditioner(self.M2, m.shape)
 
     def fission(self, phi1, phi2):
         return self.nsf1 * phi1 + self.nsf2 * phi2
@@ -239,23 +244,29 @@ def solve_adjoint(problem, tol_k=1e-9, tol_src=1e-8, max_outer=5000):
     """Fundamental-mode adjoint fluxes (w1, w2) and eigenvalue.
     Adjoint equations:  A1 w1 - Ss12 w2 = (1/k) nSf1 w1,   A2 w2 = (1/k) nSf2 w1."""
     ops = _Ops(problem, 1.0, KineticsData())
-    P1, P2 = 1 / ops.A1.diagonal(), 1 / ops.A2.diagonal()
     A1, A2 = ops.A1.tocsr(), ops.A2.tocsr()
+    if ops.n >= diffusion3d.MG_LIMIT:
+        P1, P2 = SAPreconditioner(A1, problem.mesh.shape), SAPreconditioner(A2, problem.mesh.shape)
+    else:
+        P1, P2 = 1 / ops.A1.diagonal(), 1 / ops.A2.diagonal()
     w1, w2 = np.ones(ops.n), np.ones(ops.n)
     k, dsrc = 1.0, 1.0
+    acc = Anderson()                                      # see diffusion3d.solve_k
+    src = w1 / np.linalg.norm(w1)                         # adjoint "fission source"
     for it in range(max_outer):
-        src = w1.copy()                                   # adjoint "fission source"
         rtol = inner_rtol(dsrc, tol_src * 0.01)
         w2 = _cg(A2, ops.nsf2 * src / k, w2, rtol, P2)
         w1 = _cg(A1, ops.nsf1 * src / k + ops.ss12 * w2, w1, rtol, P1)
         wgt = ops.nsf1 + ops.nsf2                          # any positive weight works
         k_new = k * (wgt @ w1) / (wgt @ src)
         norm = np.linalg.norm(w1)
-        dsrc = np.linalg.norm(w1 / norm - src / np.linalg.norm(src))
         w1, w2 = w1 / norm, w2 / norm
+        dsrc = np.linalg.norm(w1 - src)
         dk, k = abs(k_new - k), k_new
         if dk < tol_k and dsrc < tol_src and rtol <= tol_src * 0.01:
             break
+        src = acc(src, w1)
+        src = src / np.linalg.norm(src)
     return w1, w2, k
 
 
@@ -584,7 +595,7 @@ class TransientSolver:
                 s = t / dt
                 return np.concatenate(([(r - beta) * iL * p + lam @ c + qs], bi * iL * p - lam * c,
                                        p * (1 - s) - lam * y[1 + G:1 + 2 * G], p * s - lam * y[1 + 2 * G:]))
-            sol = solve_ivp(f, (0.0, dt), y0, method="Radau", rtol=1e-9, atol=1e-13,
+            sol = solve_ivp(f, (0.0, dt), y0, method="Radau", rtol=self.tol, atol=1e-13,
                             first_step=min(dt, 1e-5))
             if not sol.success:
                 raise RuntimeError(sol.message)
@@ -625,7 +636,7 @@ class TransientSolver:
         cp_e = th.cp_e
 
         def common(t, y):
-            Tf, Tc = y[iTf], y[iTc]
+            Tf, Tc = y[iTf[0]:iTf[0] + N], y[iTc[0]:iTc[0] + N]
             s = t / dt
             r = np.interp(t, tp, rho_t) + a_f @ (Tf - Tf0) + a_c @ (Tc - Tc0)
             qf = (1 - s) * G0 + s * G1
@@ -640,22 +651,43 @@ class TransientSolver:
                 mcp = mcp_fixed
             return Tf, Tc, s, r, np.interp(t, tp, inv_lam), qf, heat, mcp
 
+        # index ranges of the state vector (slices are much cheaper than fancy indexing)
+        sc, sI0, sI1 = slice(1, 1 + G), slice(1 + G, 1 + 2 * G), slice(1 + 2 * G, 1 + 3 * G)
+        sJ0, sJ1 = slice(1 + 3 * G, 1 + 3 * G + Gd), slice(1 + 3 * G + Gd, 1 + 3 * G + 2 * Gd)
+        sTf, sTc = slice(iTf[0], iTf[0] + N), slice(iTc[0], iTc[0] + N)
+        b_src, b_dst = below[hb], np.nonzero(hb)[0]
+        inv_Cf, inv_Cc = 1.0 / Cf, 1.0 / Cc
+
         def make(is_open):
             def f(t, y):
-                p, c = y[0], y[1:1 + G]
+                # called thousands of times per macro step by the ODE solver: fill one array
+                # by slices instead of building and concatenating pieces
+                p = y[0]
                 Tf, Tc, s, r, iL, qf, heat, mcp = common(t, y)
-                Tb = np.full(N, Tin)
-                Tb[hb] = Tc[below[hb]]
-                parts = [[(r - beta) * iL * p + lam @ c + qs], bi * iL * p - lam * c,
-                         p * (1 - s) - lam * y[1 + G:1 + 2 * G], p * s - lam * y[1 + 2 * G:1 + 3 * G]]
+                out = np.empty(nY)
+                out[0] = (r - beta) * iL * p + lam @ y[sc] + qs
+                out[sc] = bi * iL * p - lam * y[sc]
+                out[sI0] = p * (1 - s) - lam * y[sI0]
+                out[sI1] = p * s - lam * y[sI1]
                 if Gd:
-                    parts += [p * (1 - s) - lamd * y[iJ0], p * s - lamd * y[iJ1]]
-                parts += [(heat - hA * (Tf - Tc)) / Cf, (hA * (Tf - Tc) + mcp * (Tb - Tc)) / Cc]
+                    out[sJ0] = p * (1 - s) - lamd * y[sJ0]
+                    out[sJ1] = p * s - lamd * y[sJ1]
+                q = hA * (Tf - Tc)
+                out[sTf] = (heat - q) * inv_Cf
+                Tb = np.full(N, Tin)
+                Tb[b_dst] = Tc[b_src]
+                Tb -= Tc
+                Tb *= mcp
+                Tb += q
+                out[sTc] = Tb * inv_Cc
                 if lp is not None:
                     do, dwp, dwv, _ = lp.derivs(y[iom], y[iWp], y[iWv], lp.buoyancy(Tc, Tin), is_open)
-                    parts += [do, [dwp, dwv if is_open else 0.0]]
-                parts += [[heat.sum(), mcp * np.sum(Tc[out_nodes] - Tin)]]
-                return np.concatenate(parts)
+                    out[iom] = do
+                    out[iWp] = dwp
+                    out[iWv] = dwv if is_open else 0.0
+                out[iE] = heat.sum()
+                out[iE + 1] = mcp * (Tc[out_nodes].sum() - ne * Tin)
+                return out
 
             def jac(t, y):
                 p = y[0]
@@ -732,7 +764,8 @@ class TransientSolver:
                     return lp.event_value(yy[iom], yy[iWp], yy[iWv], lp.buoyancy(yy[iTc], Tin), o)
                 ev.terminal, ev.direction = True, -1
                 events = [ev]
-            sol = solve_ivp(f, (t0, dt), y, method="Radau", rtol=1e-9, atol=atol, jac=jac,
+            # rtol = the solver's tolerance (was 1e-9: 2.7x the steps, below every verified error)
+            sol = solve_ivp(f, (t0, dt), y, method="Radau", rtol=self.tol, atol=atol, jac=jac,
                             events=events, first_step=min(dt - t0, 1e-5))
             if not sol.success:
                 raise RuntimeError(sol.message)

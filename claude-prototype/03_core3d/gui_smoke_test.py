@@ -219,6 +219,12 @@ s = win.snap
 print(f"live: t={s.t:.1f}s  {win.read['Power'].text()}  period {win.read['Period'].text()}  "
       f"blades {s.withdrawn:.2f}/{s.target:.2f}  status '{win.status_lbl.text()}'")
 assert abs(s.target - (win.live.h0 + 0.1)) < 1e-9 and s.power_w > 1e6 and win.tcanvas.draws > 0
+for _ in range(20):                      # regression: twinx() per redraw used to pile up axes
+    win._plot_trends()
+n_ax = len(win.tfig.axes)
+print(f"live: trend figure has {n_ax} axes after {win.tcanvas.draws} redraws; "
+      f"twin ticks on {win.tax_p2.yaxis.get_ticks_position()}")
+assert n_ax == 4 and win.tax_p2.yaxis.get_ticks_position() == "right"
 for f in core_viewer.LIVE_FIELDS:
     win.field_box.setCurrentText(f)
 win.checks["Labels"].setChecked(True)

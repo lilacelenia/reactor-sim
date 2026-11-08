@@ -129,7 +129,10 @@ def pcg(A, b, x0, rtol, dinv, maxiter=20000):
     """Jacobi-preconditioned conjugate gradients for SPD A (CSR), stopping when
     ||b - A x|| <= rtol ||b|| (scipy's criterion). A lean replacement for scipy.sparse.linalg.cg,
     whose LinearOperator wrapping cost more than the matrix-vector products themselves on
-    these meshes. dinv: 1 / diag(A) as an array. Returns x (raises if not converged)."""
+    these meshes. dinv: 1 / diag(A) as an array (Jacobi), or a callable z = M(r) applying a
+    symmetric positive definite preconditioner (multigrid.SAPreconditioner).
+    Returns x (raises if not converged)."""
+    M = dinv if callable(dinv) else (lambda r: dinv * r)
     bnorm = np.linalg.norm(b)
     if bnorm == 0.0:
         return np.zeros_like(b)
@@ -143,7 +146,7 @@ def pcg(A, b, x0, rtol, dinv, maxiter=20000):
     rr = r @ r
     if rr <= tol2:
         return x
-    z = dinv * r
+    z = M(r)
     p = z.copy()
     rz = r @ z
     for _ in range(maxiter):
@@ -153,12 +156,15 @@ def pcg(A, b, x0, rtol, dinv, maxiter=20000):
         r -= alpha * Ap
         if r @ r <= tol2:
             return x
-        np.multiply(dinv, r, out=z)
+        z = M(r)
         rz_new = r @ z
         p *= rz_new / rz
         p += z
         rz = rz_new
     raise RuntimeError("CG did not converge")
+
+
+MG_LIMIT = 50_000      # cells; multigrid-preconditioned CG at and above (see multigrid.py)
 
 
 class _GroupSolver:
@@ -167,11 +173,16 @@ class _GroupSolver:
     LU fill makes it slower than warm-started CG with adaptive tolerances (4 cm MITR mesh,
     15,625 cells: eigenvalue solve 6.3 s with LU, 0.6 s with CG; 2 cm: LU runs out of memory)."""
 
-    def __init__(self, A, direct_limit=4_000):
+    def __init__(self, A, direct_limit=4_000, shape=None, mg_limit=None):
         self.A = A
         self.lu = spla.splu(A.tocsc()) if A.shape[0] <= direct_limit else None
         self.A = A.tocsr()
         self.dinv = 1.0 / A.diagonal()
+        if mg_limit is None:
+            mg_limit = MG_LIMIT
+        if self.lu is None and shape is not None and A.shape[0] >= mg_limit:
+            from multigrid import SAPreconditioner
+            self.dinv = SAPreconditioner(self.A, shape)
 
     def solve(self, b, x0, rtol):
         if self.lu is not None:
@@ -180,6 +191,49 @@ class _GroupSolver:
 
 
 # ----------------------------------------------------------------------------- solvers
+class Anderson:
+    """Anderson acceleration (type II, mixing 1) of a fixed-point iteration x <- G(x).
+
+    Keeps the last `depth` iterates x_i and images G(x_i) and returns
+        x_new = G(x) - dG gamma,   gamma = argmin || f - dF gamma ||,   f = G(x) - x,
+    i.e. the combination of recent images whose linearized residual is smallest. For a linear
+    map this is equivalent to GMRES; for the power iteration it removes the slowly decaying
+    higher harmonics that set the convergence rate (dominance ratio ~0.9 here).
+    Safeguards: the history restarts if the residual grows 10x over the best seen, or if the
+    accelerated vector has negative entries where the plain one has none (a fission source
+    must stay >= 0); that step then falls back to the plain iterate G(x)."""
+
+    def __init__(self, depth=5):
+        self.depth = depth
+        self.reset()
+
+    def reset(self):
+        self.X, self.G, self.best = [], [], np.inf
+
+    def __call__(self, x, gx):
+        res = np.linalg.norm(gx - x)
+        if res > 10 * self.best:
+            self.reset()
+        self.best = min(self.best, res)
+        self.X.append(x)
+        self.G.append(gx)
+        if len(self.X) > self.depth + 1:
+            self.X.pop(0)
+            self.G.pop(0)
+        if len(self.X) < 2:
+            return gx
+        Fm = np.array([g - xx for g, xx in zip(self.G, self.X)]).T
+        dF = np.diff(Fm, axis=1)
+        dG = np.diff(np.array(self.G).T, axis=1)
+        gamma = np.linalg.lstsq(dF, Fm[:, -1], rcond=1e-12)[0]
+        out = gx - dG @ gamma
+        tiny = 1e-10 * np.abs(out).max()
+        if not np.all(np.isfinite(out)) or (out.min() < -tiny and gx.min() >= -tiny):
+            self.reset()
+            return gx
+        return out
+
+
 def inner_rtol(change, floor, ceiling=1e-2, factor=0.05):
     """Relative tolerance for the inner (group) solves of an outer iteration whose source
     still changes by `change`: solving more accurately than the outer error is wasted work.
@@ -188,15 +242,17 @@ def inner_rtol(change, floor, ceiling=1e-2, factor=0.05):
     return max(floor, min(ceiling, factor * change))
 
 
-def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbose=False):
-    """k-eigenvalue problem by power (source) iteration.
+def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbose=False,
+            accelerate=True):
+    """k-eigenvalue problem by power (source) iteration, Anderson-accelerated on the fission
+    source (accelerate=False gives the plain power iteration; ~4x more outer iterations).
 
     guess: optional previous Result, used to warm-start (much faster for sweeps)."""
     m, xs = problem.mesh, problem.xs
     flat = {k: np.asarray(v, float).ravel() for k, v in xs.items()}
     A1 = build_loss_matrix(m, xs["D1"], xs["Sa1"] + xs["Ss12"], problem.bc)
     A2 = build_loss_matrix(m, xs["D2"], xs["Sa2"], problem.bc)
-    g1, g2 = _GroupSolver(A1), _GroupSolver(A2)
+    g1, g2 = _GroupSolver(A1, shape=m.shape), _GroupSolver(A2, shape=m.shape)
 
     if guess is not None:
         phi1, phi2, k = guess.phi1.ravel().copy(), guess.phi2.ravel().copy(), guess.k
@@ -208,6 +264,7 @@ def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbo
     converged = False
     floor = max(1e-10, min(1e-4, tol_src * 0.1))
     dsrc = 1.0
+    acc = Anderson() if accelerate else None
     for it in range(1, max_outer + 1):
         rtol = inner_rtol(dsrc, floor)
         phi1 = g1.solve(src / k, phi1, rtol)
@@ -220,14 +277,18 @@ def solve_k(problem, tol_k=1e-6, tol_src=1e-5, max_outer=3000, guess=None, verbo
         phi2 /= norm
         dsrc = np.linalg.norm(new - src)
         dk = abs(k_new - k)
-        src, k = new, k_new
         if verbose and (it % 25 == 0 or it == 1):
-            print(f"    outer {it:4d}  k = {k:.7f}  dk = {dk:.1e}  dsrc = {dsrc:.1e}")
+            print(f"    outer {it:4d}  k = {k_new:.7f}  dk = {dk:.1e}  dsrc = {dsrc:.1e}")
         # only accept convergence from a sweep done at full inner accuracy: a warm start can
         # already satisfy a loose inner tolerance, which would leave the source unchanged
         if dk < tol_k and dsrc < tol_src and rtol <= floor:
+            src, k = new, k_new
             converged = True
             break
+        if acc is not None:
+            new = acc(src, new)
+            new /= np.linalg.norm(new)
+        src, k = new, k_new
 
     return _package(problem, k, phi1, phi2, it, converged)
 
@@ -240,11 +301,12 @@ def solve_fixed_source(problem, Q1, Q2=None, tol=1e-6, max_outer=5000):
     flat = {k: np.asarray(v, float).ravel() for k, v in xs.items()}
     Q1 = np.asarray(Q1, float).ravel()
     Q2 = np.zeros(m.n_cells) if Q2 is None else np.asarray(Q2, float).ravel()
-    g1 = _GroupSolver(build_loss_matrix(m, xs["D1"], xs["Sa1"] + xs["Ss12"], problem.bc))
-    g2 = _GroupSolver(build_loss_matrix(m, xs["D2"], xs["Sa2"], problem.bc))
+    g1 = _GroupSolver(build_loss_matrix(m, xs["D1"], xs["Sa1"] + xs["Ss12"], problem.bc), shape=m.shape)
+    g2 = _GroupSolver(build_loss_matrix(m, xs["D2"], xs["Sa2"], problem.bc), shape=m.shape)
     phi1, phi2 = np.zeros(m.n_cells), np.zeros(m.n_cells)
     fis = np.zeros(m.n_cells)
     change = 1.0
+    acc = Anderson()                    # linear fixed point: equivalent to GMRES
     for it in range(1, max_outer + 1):
         rtol = inner_rtol(change, 1e-10)
         phi1 = g1.solve(fis + Q1, phi1, rtol)
@@ -254,7 +316,7 @@ def solve_fixed_source(problem, Q1, Q2=None, tol=1e-6, max_outer=5000):
         if change <= tol and rtol <= 1e-10:
             fis = new
             break
-        fis = new
+        fis = acc(fis, new)
     return _package(problem, np.nan, phi1, phi2, it, True)
 
 

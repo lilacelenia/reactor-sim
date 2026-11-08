@@ -4,14 +4,14 @@
     16 s after shutdown from long operation: 4.396%; MITR 2003 analysis (DKPOWR): 325 kW / 7.4 MW = 4.392%  (diff +0.1%)
     300 s after 4200 MWd at 7.35 MW: 2.404%; LEU PSAR (ORIGEN-S): 186.2 kW / 7.35 MW = 2.533%  (diff -5.1%)
 [7] Pump coastdown in the transient solver (1 W; trip at 1 s)
-    f = 0    pcqs    56 steps: pump speed max error 4.4e-16, core flow max rel. error 8.3e-08 (flow 8.1% at 39 s)
-    f = 0    direct  56 steps: pump speed max error 1.6e-15, core flow max rel. error 8.1e-08 (flow 8.1% at 39 s)
-    f = 0.05 pcqs   105 steps: pump speed max error 8.3e-16 (pumps stop 18.1 s after the trip)
-    f = 0.05 direct 105 steps: pump speed max error 2.2e-15 (pumps stop 18.1 s after the trip)
+    f = 0    pcqs    56 steps: pump speed max error 4.7e-15, core flow max rel. error 8.3e-08 (flow 8.1% at 39 s)
+    f = 0    direct  56 steps: pump speed max error 1.3e-15, core flow max rel. error 8.1e-08 (flow 8.1% at 39 s)
+    f = 0.05 pcqs   105 steps: pump speed max error 1.2e-15 (pumps stop 18.1 s after the trip)
+    f = 0.05 direct 105 steps: pump speed max error 2.4e-15 (pumps stop 18.1 s after the trip)
 [8] Natural circulation: pumps tripped at constant fission power
-    100 kW, inlet 40 C: transient core flow 1.4027 kg/s (NCVs open, drift 7.4e-11 kg/s2) vs algebraic 1.4027 kg/s: rel. diff 5.4e-10; temperatures 2.3e-08 K
+    100 kW, inlet 40 C: transient core flow 1.4027 kg/s (NCVs open, drift 1.0e-10 kg/s2) vs algebraic 1.4027 kg/s: rel. diff 8.4e-10; temperatures 3.5e-08 K
         fuel-channel flow 1.262 kg/s, mixed outlet 59.0 C, hottest channel outlet 64.3 C, hottest plate 64.8 C
-    100 kW, inlet 60 C: transient core flow 1.5167 kg/s (NCVs open, drift 7.8e-11 kg/s2) vs algebraic 1.5167 kg/s: rel. diff 4.9e-10; temperatures 2.0e-08 K
+    100 kW, inlet 60 C: transient core flow 1.5167 kg/s (NCVs open, drift 1.1e-10 kg/s2) vs algebraic 1.5167 kg/s: rel. diff 6.5e-10; temperatures 2.7e-08 K
         fuel-channel flow 1.365 kg/s, mixed outlet 77.5 C, hottest channel outlet 82.5 C, hottest plate 83.0 C
     published (LEU PSAR Table 4-18, NCVs only, 100 kW, 60 C inlet, MULCH-II): 1.35 kg/s through the core, hottest outlet 94.6 C
 
